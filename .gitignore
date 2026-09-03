@@ -1,0 +1,12 @@
+node_modules
+.env
+.env.*
+!.env.example
+dist
+.vite
+coverage
+prisma/dev.db
+prisma/*.db
+.DS_Store
+npm-debug.log*
+*.tsbuildinfo

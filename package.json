@@ -1,0 +1,22 @@
+{
+  "name": "aquaculture",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,web -c cyan,green \"npm run dev -w @aquaculture/api\" \"npm run dev -w @aquaculture/web\"",
+    "build": "npm run build -w @aquaculture/api && npm run build -w @aquaculture/web",
+    "lint": "npm run lint -w @aquaculture/api && npm run lint -w @aquaculture/web",
+    "format": "prettier --write .",
+    "db:generate": "npm run db:generate -w @aquaculture/api",
+    "db:push": "npm run db:push -w @aquaculture/api",
+    "db:studio": "npm run db:studio -w @aquaculture/api",
+    "db:seed": "npm run db:seed -w @aquaculture/api"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "prettier": "^3.4.1"
+  }
+}

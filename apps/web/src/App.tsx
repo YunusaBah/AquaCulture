@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+﻿import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -239,7 +239,7 @@ function App() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
+          Authorization: token ? 'Bearer ' + token : '',
         },
         body: JSON.stringify({ note: fieldNote }),
       });
@@ -261,7 +261,7 @@ function App() {
 
   const loadData = useCallback(async () => {
     if (!token) return;
-    const headers = { Authorization: `Bearer ${token}` };
+    const headers = { Authorization: token ? 'Bearer ' + token : '' };
     const [farmsRes, pondsRes, feedingsRes, waterRes, mortalityRes, inventoryRes, tasksRes, financeRes, aiRes, notificationsRes] = await Promise.all([
       fetch(`${apiBaseUrl}/farms`, { headers }),
       fetch(`${apiBaseUrl}/ponds`, { headers }),
@@ -305,7 +305,7 @@ function App() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
+          Authorization: token ? 'Bearer ' + token : '',
       },
       body: JSON.stringify({
         items: entries.map((entry: Record<string, any>) => ({
@@ -323,7 +323,7 @@ function App() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
+          Authorization: token ? 'Bearer ' + token : '',
         },
       });
       if (flushResponse.ok) {
@@ -402,7 +402,7 @@ function App() {
       return;
     }
 
-    const headers = { 'Content-Type': 'application/json', Authorization: `****** };
+    const headers = { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' };
     const calls: Promise<Response>[] = [];
 
     if (Number(pondLogForm.feedKg) > 0) {
@@ -510,7 +510,7 @@ function App() {
   async function openPond(pondId: string) {
     if (!token) return;
     setSelectedPondId(pondId);
-    const response = await fetch(`${apiBaseUrl}/ponds/${pondId}`, { headers: { Authorization: `Bearer ${token}` } });
+    const response = await fetch(`${apiBaseUrl}/ponds/${pondId}`, { headers: { Authorization: token ? 'Bearer ' + token : '' } });
     if (!response.ok) return;
     const body = await response.json();
     setSelectedPond(body.pond);
@@ -535,7 +535,7 @@ function App() {
       }, 'pond');
       return;
     }
-    const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+    const headers = { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' };
     const allSites = data.farms.flatMap((farm) => farm.sites || []);
     let site = allSites.find((item) => item.name?.toLowerCase() === newPond.siteName.toLowerCase());
     if (!site) {
@@ -569,7 +569,7 @@ function App() {
     if (!token || !isOwner) return;
     const response = await fetch(`${apiBaseUrl}/ponds/${pondId}`, {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Authorization: token ? 'Bearer ' + token : '' },
     });
     if (response.ok) {
       if (selectedPondId === pondId) {
@@ -595,7 +595,7 @@ function App() {
     }
     const response = await fetch(`${apiBaseUrl}/finance`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' },
       body: JSON.stringify({
         ...financeForm,
         quantity: Number(financeForm.quantity) || undefined,
@@ -612,7 +612,7 @@ function App() {
 
   async function deleteFinanceRecord(id: string) {
     if (!token || !isOwner) return;
-    const response = await fetch(`${apiBaseUrl}/finance/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+    const response = await fetch(`${apiBaseUrl}/finance/${id}`, { method: 'DELETE', headers: { Authorization: token ? 'Bearer ' + token : '' } });
     if (response.ok) await loadData();
   }
 
@@ -621,7 +621,7 @@ function App() {
     if (!token || !isOwner) return;
     const response = await fetch(`${apiBaseUrl}/inventory`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' },
       body: JSON.stringify({
         name: inventoryForm.name,
         category: inventoryForm.category,
@@ -651,7 +651,7 @@ function App() {
     }
     const response = await fetch(`${apiBaseUrl}/tasks`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' },
       body: JSON.stringify({
         title: taskForm.title,
         description: taskForm.description,
@@ -690,7 +690,7 @@ function App() {
       return;
     }
 
-    const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+    const headers = { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' };
     const calls: Promise<Response>[] = [];
 
     if (Number(pondLogForm.feedKg) > 0) {
@@ -1193,3 +1193,6 @@ function RecordList({ records, emptyTitle, render }: { records: any[]; emptyTitl
 }
 
 export default App;
+
+
+

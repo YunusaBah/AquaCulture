@@ -1,0 +1,55 @@
+import { Request, Response } from 'express';
+import { prisma } from '../lib/prisma';
+import { AuthRequest } from '../middleware/auth';
+
+export async function getPonds(req: AuthRequest, res: Response) {
+  const ponds = await prisma.pond.findMany({
+    orderBy: { number: 'asc' },
+    include: {
+      site: true,
+      assignedUser: { select: { id: true, name: true, email: true } },
+      current_batch: true,
+    },
+  });
+
+  res.json({ ponds });
+}
+
+export async function createPond(req: AuthRequest, res: Response) {
+  const { siteId, number, species, capacity, currentVolume, assignedUserId, status, createdAt, initialPopulation } = req.body as {
+    siteId?: string;
+    number?: number;
+    species?: string;
+    capacity?: number;
+    currentVolume?: number;
+    assignedUserId?: string;
+    status?: string;
+    createdAt?: string;
+    initialPopulation?: number;
+  };
+
+  if (!siteId || !number || !species || !capacity) {
+    return res.status(400).json({ error: 'siteId, number, species, and capacity are required' });
+  }
+
+  const pond = await prisma.pond.create({
+    data: {
+      siteId,
+      number,
+      species: species as any,
+      capacity,
+      current_volume: currentVolume ?? null,
+      initial_population: initialPopulation ?? null,
+      current_population: initialPopulation ?? null,
+      assignedUserId: assignedUserId || null,
+      status: (status as any) || 'ACTIVE',
+      createdAt: createdAt ? new Date(createdAt) : undefined,
+    },
+    include: {
+      site: true,
+      assignedUser: { select: { id: true, name: true, email: true } },
+    },
+  });
+
+  res.status(201).json({ pond });
+}

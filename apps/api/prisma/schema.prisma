@@ -1,0 +1,401 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RoleName {
+  OWNER
+  WORKER
+}
+
+// Enterprise-grade core models
+model User {
+  id              String            @id @default(uuid())
+  email           String            @unique
+  name            String?
+  password        String
+  role            Role              @relation(fields: [roleId], references: [id])
+  roleId          String
+  farms           Farm[]            @relation("farm_members")
+  ownedFarms      Farm[] // farms where user is owner
+  assignedPonds   Pond[]            @relation("assigned_worker")
+  feedLogs        FeedingLog[]
+  waterLogs       WaterQualityLog[]
+  mortalityLogs   MortalityLog[]
+  aiReports       AiReport[]
+  aiConversations AiConversation[]
+  aiMessages      AiMessage[]
+  uploads         Attachment[]
+  sessions        Session[]
+  auditLogs       AuditLog[]
+  financeRecords  FinanceRecord[]
+  syncQueue       DeviceSync[]
+
+  // Task relations
+  createdTasks    Task[]
+  taskAssignments TaskAssignment[]
+  taskComments    TaskComment[]
+  notifications   Notification[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Role {
+  id    String   @id @default(uuid())
+  name  RoleName @unique
+  users User[]
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  user      User     @relation(fields: [userId], references: [id])
+  userId    String
+  token     String   @unique
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+}
+
+model Farm {
+  id        String     @id @default(uuid())
+  name      String
+  ownerId   String
+  owner     User       @relation(fields: [ownerId], references: [id])
+  sites     FarmSite[]
+  members   User[]     @relation("farm_members")
+  createdAt DateTime   @default(now())
+}
+
+model FarmSite {
+  id        String   @id @default(uuid())
+  farm      Farm     @relation(fields: [farmId], references: [id])
+  farmId    String
+  name      String
+  location  String?
+  timezone  String?
+  ponds     Pond[]
+  createdAt DateTime @default(now())
+}
+
+model Pond {
+  id                 String            @id @default(uuid())
+  site               FarmSite          @relation(fields: [siteId], references: [id])
+  siteId             String
+  number             Int
+  species            Species
+  capacity           Int
+  current_volume     Float?
+  initial_population Int?
+  current_population Int?
+  stockedAt          DateTime?
+  initialAvgWeightG  Float?
+  targetHarvestKg    Float?
+  expectedGrowthGDay Float?
+  status             PondStatus        @default(ACTIVE)
+  current_batch      FishBatch?        @relation(fields: [current_batchId], references: [id])
+  current_batchId    String?
+  assignedUser       User?             @relation("assigned_worker", fields: [assignedUserId], references: [id])
+  assignedUserId     String?
+  feedLogs           FeedingLog[]
+  waterLogs          WaterQualityLog[]
+  mortalityLogs      MortalityLog[]
+  financeRecords     FinanceRecord[]
+  // Attachments (photos) related to this pond
+  attachments        Attachment[]
+  // QR code stored as a data URI (optional)
+  qrCode             String?
+  createdAt          DateTime          @default(now())
+}
+
+model FinanceRecord {
+  id          String              @id @default(uuid())
+  type        FinanceRecordType
+  category    String
+  description String?
+  quantity    Float?
+  unit        String?
+  unitPrice   Float?
+  amount      Float
+  pond        Pond?               @relation(fields: [pondId], references: [id])
+  pondId      String?
+  recordedBy  User                @relation(fields: [recordedById], references: [id])
+  recordedById String
+  recordedAt  DateTime            @default(now())
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+}
+
+model FishBatch {
+  id              String    @id @default(uuid())
+  batchNumber     String    @unique
+  species         Species
+  stockingDate    DateTime
+  supplier        String?
+  purchasePrice   Float?
+  initialQuantity Int
+  currentQuantity Int
+  expectedHarvest DateTime?
+  ponds           Pond[]
+}
+
+model FeedingLog {
+  id          String       @id @default(uuid())
+  pond        Pond         @relation(fields: [pondId], references: [id])
+  pondId      String
+  worker      User?        @relation(fields: [workerId], references: [id])
+  workerId    String?
+  date        DateTime     @default(now())
+  feedBrand   String?
+  feedType    String?
+  feedSize    String?
+  quantityKg  Float
+  appetite    Int?
+  observation String?
+  gpsLat      Float?
+  gpsLng      Float?
+  attachments Attachment[]
+}
+
+model WaterQualityLog {
+  id           String   @id @default(uuid())
+  pond         Pond     @relation(fields: [pondId], references: [id])
+  pondId       String
+  measuredAt   DateTime @default(now())
+  ph           Float?
+  temperature  Float?
+  ammonia      Float?
+  nitrite      Float?
+  nitrate      Float?
+  dissolvedO2  Float?
+  conductivity Float?
+  salinity     Float?
+  turbidity    Float?
+  waterLevel   Float?
+  waterAddedPercent   Float?
+  waterRemovedPercent Float?
+  comment      String?
+  worker       User?    @relation(fields: [workerId], references: [id])
+  workerId     String?
+}
+
+model MortalityLog {
+  id            String       @id @default(uuid())
+  pond          Pond         @relation(fields: [pondId], references: [id])
+  pondId        String
+  numberDead    Int
+  avgSizeGrams  Float?
+  possibleCause String?
+  observedAt    DateTime     @default(now())
+  attachments   Attachment[]
+  worker        User?        @relation(fields: [workerId], references: [id])
+  workerId      String?
+  aiReports     AiReport[]
+}
+
+model InventoryItem {
+  id           String                 @id @default(uuid())
+  sku          String?                @unique
+  name         String
+  category     String
+  unit         String
+  currentStock Int                    @default(0)
+  minStock     Int                    @default(0)
+  transactions InventoryTransaction[]
+}
+
+model InventoryTransaction {
+  id        String        @id @default(uuid())
+  item      InventoryItem @relation(fields: [itemId], references: [id])
+  itemId    String
+  change    Int
+  reason    String?
+  createdAt DateTime      @default(now())
+}
+
+model AiReport {
+  id             String          @id @default(uuid())
+  title          String?
+  content        String
+  createdAt      DateTime        @default(now())
+  sourceId       String?
+  sourceType     String?
+  user           User?           @relation(fields: [userId], references: [id])
+  userId         String?
+  mortalityLogId String?
+  mortalityLog   MortalityLog?   @relation(fields: [mortalityLogId], references: [id])
+  conversationId String?
+  conversation   AiConversation? @relation(fields: [conversationId], references: [id])
+  AiMessage      AiMessage[]
+}
+
+model AiConversation {
+  id        String      @id @default(uuid())
+  title     String?
+  user      User?       @relation(fields: [userId], references: [id])
+  userId    String?
+  messages  AiMessage[]
+  createdAt DateTime    @default(now())
+  AiReport  AiReport[]
+}
+
+model AiMessage {
+  id             String         @id @default(uuid())
+  conversation   AiConversation @relation(fields: [conversationId], references: [id])
+  conversationId String
+  role           AiRole
+  content        String
+  createdAt      DateTime       @default(now())
+  aiReport       AiReport?      @relation(fields: [aiReportId], references: [id])
+  aiReportId     String?
+  user           User?          @relation(fields: [userId], references: [id])
+  userId         String?
+}
+
+enum AiRole {
+  SYSTEM
+  USER
+  ASSISTANT
+}
+
+model Attachment {
+  id             String        @id @default(uuid())
+  url            String
+  mime           String?
+  uploadedBy     User?         @relation(fields: [uploadedById], references: [id])
+  uploadedById   String?
+  feedingLog     FeedingLog?   @relation(fields: [feedingLogId], references: [id])
+  feedingLogId   String?
+  mortalityLog   MortalityLog? @relation(fields: [mortalityLogId], references: [id])
+  mortalityLogId String?
+  // optional relation to tasks (attachments used for tasks)
+  task           Task?         @relation("task_attachments", fields: [taskId], references: [id])
+  taskId         String?
+  // relation to pond (photos)
+  pond           Pond?         @relation(fields: [pondId], references: [id])
+  pondId         String?
+  createdAt      DateTime      @default(now())
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  user      User?    @relation(fields: [userId], references: [id])
+  userId    String?
+  action    String
+  tableName String?
+  recordId  String?
+  meta      Json?
+  createdAt DateTime @default(now())
+}
+
+// Task & notification models
+model Task {
+  id          String           @id @default(uuid())
+  title       String
+  description String?
+  creator     User             @relation(fields: [creatorId], references: [id])
+  creatorId   String
+  assignees   TaskAssignment[]
+  comments    TaskComment[]
+  status      TaskStatus       @default(OPEN)
+  priority    TaskPriority     @default(MEDIUM)
+  dueAt       DateTime?
+  checklist   Json?
+  photos      Attachment[]     @relation("task_attachments")
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+}
+
+model TaskAssignment {
+  id         String   @id @default(uuid())
+  task       Task     @relation(fields: [taskId], references: [id])
+  taskId     String
+  user       User     @relation(fields: [userId], references: [id])
+  userId     String
+  assignedAt DateTime @default(now())
+  accepted   Boolean? @default(false)
+}
+
+model TaskComment {
+  id        String   @id @default(uuid())
+  task      Task     @relation(fields: [taskId], references: [id])
+  taskId    String
+  user      User     @relation(fields: [userId], references: [id])
+  userId    String
+  message   String
+  createdAt DateTime @default(now())
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  user      User?    @relation(fields: [userId], references: [id])
+  userId    String?
+  title     String
+  body      String?
+  read      Boolean  @default(false)
+  meta      Json?
+  createdAt DateTime @default(now())
+}
+
+model DeviceSync {
+  id        String      @id @default(uuid())
+  user      User?       @relation(fields: [userId], references: [id])
+  userId    String?
+  deviceId  String
+  action    String
+  tableName String?
+  recordId  String?
+  payload   Json?
+  status    SyncStatus  @default(PENDING)
+  syncedAt  DateTime?
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+}
+
+// Enums
+enum Species {
+  CATFISH
+  TILAPIA
+  TROUT
+  SHRIMP
+  OTHER
+}
+
+enum PondStatus {
+  ACTIVE
+  INACTIVE
+  MAINTENANCE
+  HARVESTED
+}
+
+enum TaskStatus {
+  OPEN
+  IN_PROGRESS
+  BLOCKED
+  COMPLETED
+  CANCELLED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum SyncStatus {
+  PENDING
+  SYNCHRONIZED
+  REJECTED
+}
+
+enum FinanceRecordType {
+  INCOME
+  EXPENSE
+  BUDGET
+}
