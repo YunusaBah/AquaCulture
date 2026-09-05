@@ -118,33 +118,40 @@ async function applyQueuedSyncItem(
         throw new Error('pond_update payload requires pondId');
       }
 
-      const calls: Promise<any>[] = [];
-      const feedKg = asNumber(payload.feedKg);
-      if (feedKg && feedKg > 0) {
-        calls.push(
-          prisma.feedingLog.create({
+      // perform all pond updates inside a transaction so denormalized population stays consistent
+      const result = await prisma.$transaction(async (tx) => {
+        const created: any[] = [];
+        const pondRec = await tx.pond.findUnique({ where: { id: String(pondId) }, select: { current_population: true, initial_population: true } });
+        const initial = pondRec?.initial_population ?? 0;
+        let currentPool = pondRec?.current_population ?? initial;
+
+        const feedKgFromGrams = asNumber(payload.feedGrams);
+        const feedKg = asNumber(payload.feedKg) ?? (feedKgFromGrams ? feedKgFromGrams / 1000 : undefined);
+        if (feedKg && feedKg > 0) {
+          const f = await tx.feedingLog.create({
             data: {
               pondId: String(pondId),
               workerId: userId,
               quantityKg: feedKg,
+              feedType: typeof payload.feedType === 'string' && payload.feedType ? String(payload.feedType) : 'Pellet',
+              feedSize: typeof payload.feedSize === 'string' && payload.feedSize ? String(payload.feedSize) : '4mm',
               appetite: asNumber(payload.appetite) ?? null,
               observation: payload.behavior ? String(payload.behavior) : null,
               date: new Date(),
             },
-          }),
-        );
-      }
+          });
+          created.push(f);
+        }
 
-      if (
-        payload.ph !== undefined ||
-        payload.dissolvedO2 !== undefined ||
-        payload.ammonia !== undefined ||
-        payload.waterAddedPercent !== undefined ||
-        payload.waterRemovedPercent !== undefined ||
-        payload.waterComment
-      ) {
-        calls.push(
-          prisma.waterQualityLog.create({
+        if (
+          payload.ph !== undefined ||
+          payload.dissolvedO2 !== undefined ||
+          payload.ammonia !== undefined ||
+          payload.waterAddedPercent !== undefined ||
+          payload.waterRemovedPercent !== undefined ||
+          payload.waterComment
+        ) {
+          const w = await tx.waterQualityLog.create({
             data: {
               pondId: String(pondId),
               workerId: userId,
@@ -156,14 +163,14 @@ async function applyQueuedSyncItem(
               waterRemovedPercent: asNumber(payload.waterRemovedPercent) ?? null,
               comment: payload.waterComment ? String(payload.waterComment) : 'Worker pond update',
             },
-          }),
-        );
-      }
+          });
+          created.push(w);
+        }
 
-      const mortality = asNumber(payload.mortality);
-      if (mortality && mortality > 0) {
-        calls.push(
-          prisma.mortalityLog.create({
+        const mortality = asNumber(payload.mortality);
+        if (mortality && mortality > 0) {
+          if (mortality > currentPool) throw new Error('Mortality cannot exceed current live fish');
+          const m = await tx.mortalityLog.create({
             data: {
               pondId: String(pondId),
               workerId: userId,
@@ -171,15 +178,50 @@ async function applyQueuedSyncItem(
               possibleCause: payload.mortalityCause ? String(payload.mortalityCause) : 'Unspecified',
               observedAt: new Date(),
             },
-          }),
-        );
-      }
+          });
+          currentPool = Math.max(0, currentPool - mortality);
+          await tx.pond.update({ where: { id: String(pondId) }, data: { current_population: currentPool } });
+          created.push(m);
+        }
 
-      if (calls.length === 0) {
-        return null;
-      }
+        const harvestQty = asNumber(payload.harvestQuantity);
+        if (harvestQty && harvestQty > 0) {
+          if (harvestQty > currentPool) throw new Error('Harvest quantity cannot exceed current live fish');
+          const h = await (tx as any).harvestLog.create({
+            data: {
+              pondId: String(pondId),
+              workerId: userId,
+              numberHarvested: harvestQty,
+              avgWeightGrams: asNumber(payload.harvestAvgWeight) ?? null,
+              biomassKg: asNumber(payload.harvestBiomassKg) ?? null,
+              method: payload.harvestMethod ? String(payload.harvestMethod) : null,
+              destination: payload.harvestDestination ? String(payload.harvestDestination) : null,
+              recordedAt: new Date(),
+            },
+          });
+          currentPool = Math.max(0, currentPool - harvestQty);
+          await tx.pond.update({ where: { id: String(pondId) }, data: { current_population: currentPool } });
+          created.push(h);
+        }
 
-      return Promise.all(calls);
+        const growth = asNumber(payload.avgWeightGrams);
+        if (growth && growth > 0) {
+          const g = await (tx as any).growthMeasurement.create({
+            data: {
+              pondId: String(pondId),
+              workerId: userId,
+              avgWeightGrams: growth,
+              measuredAt: new Date(),
+              comment: payload.growthComment ? String(payload.growthComment) : null,
+            },
+          });
+          created.push(g);
+        }
+
+        return created;
+      });
+
+      return result;
     }
 
     default:

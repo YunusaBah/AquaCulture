@@ -83,17 +83,22 @@ export async function login(req: Request, res: Response) {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'email and password required' });
 
-  const fallbackUser = getFallbackUserByCredentials(email, password);
-  if (fallbackUser) {
-    const token = jwt.sign({ userId: fallbackUser.id }, JWT_SECRET, { expiresIn: '7d' });
-    return res.json({
-      user: { id: fallbackUser.id, email: fallbackUser.email, name: fallbackUser.name, role: fallbackUser.role },
-      token,
-    });
-  }
-
   try {
+    // Ensure development seed users exist so tokens map to real DB users
     await ensureDevelopmentUsers();
+
+    // If credentials match one of the in-memory fallback users, map to the seeded DB user
+    const fallbackUser = getFallbackUserByCredentials(email, password);
+    if (fallbackUser) {
+      const seeded = await prisma.user.findUnique({ where: { email: fallbackUser.email }, include: { role: true } });
+      if (seeded) {
+        const token = jwt.sign({ userId: seeded.id }, JWT_SECRET, { expiresIn: '7d' });
+        return res.json({ user: { id: seeded.id, email: seeded.email, name: seeded.name, role: seeded.role.name }, token });
+      }
+      // fallback to original fallback behavior if DB user not found
+      const token = jwt.sign({ userId: fallbackUser.id }, JWT_SECRET, { expiresIn: '7d' });
+      return res.json({ user: { id: fallbackUser.id, email: fallbackUser.email, name: fallbackUser.name, role: fallbackUser.role }, token });
+    }
 
     const user = await prisma.user.findUnique({ where: { email }, include: { role: true } });
     if (!user) return res.status(401).json({ error: 'Invalid credentials' });
@@ -102,7 +107,7 @@ export async function login(req: Request, res: Response) {
     const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
     return res.json({ user: { id: user.id, email: user.email, name: user.name, role: user.role.name }, token });
   } catch (error) {
-    console.error('Login fallback failed', error);
+    console.error('Login failed', error);
     return res.status(401).json({ error: 'Invalid credentials' });
   }
 }

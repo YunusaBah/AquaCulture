@@ -3,9 +3,9 @@ import { prisma } from '../lib/prisma';
 import { AuthRequest } from '../middleware/auth';
 
 function financeSummary(records: Array<{ type: string; amount: number; pondId: string | null }>) {
-  const income = records.filter((record) => record.type === 'INCOME').reduce((sum, record) => sum + record.amount, 0);
-  const expenses = records.filter((record) => record.type === 'EXPENSE').reduce((sum, record) => sum + record.amount, 0);
-  const budget = records.filter((record) => record.type === 'BUDGET').reduce((sum, record) => sum + record.amount, 0);
+  const income = records.filter((record) => record.type === 'INCOME').reduce((sum: number, record) => sum + record.amount, 0);
+  const expenses = records.filter((record) => record.type === 'EXPENSE').reduce((sum: number, record) => sum + record.amount, 0);
+  const budget = records.filter((record) => record.type === 'BUDGET').reduce((sum: number, record) => sum + record.amount, 0);
   const profit = income - expenses;
   const budgetRemaining = budget - expenses;
   const pondTotals = records.reduce<Record<string, { income: number; expenses: number; profit: number }>>((totals, record) => {

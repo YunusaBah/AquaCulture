@@ -15,6 +15,7 @@ import notificationRoutes from './routes/notifications';
 import aiRoutes from './routes/ai';
 import siteRoutes from './routes/sites';
 import syncRoutes from './routes/sync';
+import harvestRoutes from './routes/harvest';
 import { PORT } from './config';
 
 const app = express();
@@ -41,6 +42,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/sites', siteRoutes);
 app.use('/api/sync', syncRoutes);
+app.use('/api/harvests', harvestRoutes);
 
 app.get('/api/health', (_, res) => res.json({ status: 'ok', ts: Date.now() }));
 

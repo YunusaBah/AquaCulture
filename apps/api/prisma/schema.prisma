@@ -26,6 +26,8 @@ model User {
   feedLogs        FeedingLog[]
   waterLogs       WaterQualityLog[]
   mortalityLogs   MortalityLog[]
+  harvestLogs     HarvestLog[]
+  growthMeasurements GrowthMeasurement[]
   aiReports       AiReport[]
   aiConversations AiConversation[]
   aiMessages      AiMessage[]
@@ -105,6 +107,8 @@ model Pond {
   feedLogs           FeedingLog[]
   waterLogs          WaterQualityLog[]
   mortalityLogs      MortalityLog[]
+  harvestLogs        HarvestLog[]
+  growthMeasurements GrowthMeasurement[]
   financeRecords     FinanceRecord[]
   // Attachments (photos) related to this pond
   attachments        Attachment[]
@@ -198,6 +202,33 @@ model MortalityLog {
   aiReports     AiReport[]
 }
 
+model HarvestLog {
+  id               String   @id @default(uuid())
+  pond             Pond     @relation(fields: [pondId], references: [id])
+  pondId           String
+  numberHarvested  Int
+  avgWeightGrams   Float?
+  biomassKg        Float?
+  method           String?
+  destination      String?
+  recordedAt       DateTime @default(now())
+  attachments      Attachment[]
+  worker           User?    @relation(fields: [workerId], references: [id])
+  workerId         String?
+}
+
+model GrowthMeasurement {
+  id             String   @id @default(uuid())
+  pond           Pond     @relation(fields: [pondId], references: [id])
+  pondId         String
+  measuredAt     DateTime @default(now())
+  avgWeightGrams Float
+  attachments    Attachment[]
+  worker         User?    @relation(fields: [workerId], references: [id])
+  workerId       String?
+  comment        String?
+}
+
 model InventoryItem {
   id           String                 @id @default(uuid())
   sku          String?                @unique
@@ -273,6 +304,10 @@ model Attachment {
   feedingLogId   String?
   mortalityLog   MortalityLog? @relation(fields: [mortalityLogId], references: [id])
   mortalityLogId String?
+  harvestLog     HarvestLog?   @relation(fields: [harvestLogId], references: [id])
+  harvestLogId   String?
+  growthMeasurement GrowthMeasurement? @relation(fields: [growthMeasurementId], references: [id])
+  growthMeasurementId String?
   // optional relation to tasks (attachments used for tasks)
   task           Task?         @relation("task_attachments", fields: [taskId], references: [id])
   taskId         String?

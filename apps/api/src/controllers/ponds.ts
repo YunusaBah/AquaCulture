@@ -6,6 +6,7 @@ import path from 'path';
 import QRCode from 'qrcode';
 import multer from 'multer';
 import { createNotificationForUser } from './notifications';
+import type { FeedingLog, MortalityLog, HarvestLog, GrowthMeasurement, WaterQualityLog } from '@prisma/client';
 
 const upload = multer({ dest: path.join(process.cwd(), 'uploads') });
 
@@ -13,6 +14,18 @@ function startOfToday() {
   const date = new Date();
   date.setHours(0, 0, 0, 0);
   return date;
+}
+
+function getRecommendedFeedSize(avgWeightGrams: number | null | undefined) {
+  if (!avgWeightGrams || avgWeightGrams <= 0) return '4mm';
+  if (avgWeightGrams < 50) return '1mm';
+  if (avgWeightGrams < 100) return '1.5mm';
+  if (avgWeightGrams < 200) return '2mm';
+  if (avgWeightGrams < 350) return '2.5mm';
+  if (avgWeightGrams < 500) return '3mm';
+  if (avgWeightGrams < 700) return '3.5mm';
+  if (avgWeightGrams < 900) return '4mm';
+  return '4.5mm';
 }
 
 function buildHarvestProjection(pond: {
@@ -61,6 +74,8 @@ export async function getPonds(req: AuthRequest, res: Response) {
 export async function getPond(req: AuthRequest, res: Response) {
   const { id } = req.params;
   const today = startOfToday();
+
+  // basic pond record
   const pond = await prisma.pond.findUnique({
     where: { id },
     include: {
@@ -68,36 +83,76 @@ export async function getPond(req: AuthRequest, res: Response) {
       assignedUser: { select: { id: true, name: true, email: true } },
       current_batch: true,
       attachments: true,
-      feedLogs: { where: { date: { gte: today } }, orderBy: { date: 'desc' }, include: { worker: { select: { id: true, name: true, email: true } } } },
-      waterLogs: { orderBy: { measuredAt: 'desc' }, take: 1, include: { worker: { select: { id: true, name: true, email: true } } } },
-      mortalityLogs: { where: { observedAt: { gte: today } }, orderBy: { observedAt: 'desc' }, include: { worker: { select: { id: true, name: true, email: true } } } },
     },
   });
   if (!pond) return res.status(404).json({ error: 'Pond not found' });
 
-  const todayFeedKg = pond.feedLogs.reduce((sum, log) => sum + log.quantityKg, 0);
-  const todayMortality = pond.mortalityLogs.reduce((sum, log) => sum + log.numberDead, 0);
-  const latestWater = pond.waterLogs[0] || null;
-  const latestFeeding = pond.feedLogs[0] || null;
+  // load related logs separately to avoid typed include mismatches
+  const [feedLogs, waterLogs, mortalityLogs, harvestLogs, growthMeasurements] = await Promise.all([
+    prisma.feedingLog.findMany({ where: { pondId: id }, orderBy: { date: 'desc' }, include: { worker: { select: { id: true, name: true, email: true } } } }),
+    prisma.waterQualityLog.findMany({ where: { pondId: id }, orderBy: { measuredAt: 'desc' }, take: 1, include: { worker: { select: { id: true, name: true, email: true } } } }),
+    prisma.mortalityLog.findMany({ where: { pondId: id }, orderBy: { observedAt: 'desc' }, include: { worker: { select: { id: true, name: true, email: true } } } }),
+    prisma.harvestLog.findMany({ where: { pondId: id }, orderBy: { recordedAt: 'desc' }, include: { worker: { select: { id: true, name: true, email: true } } } }),
+    prisma.growthMeasurement.findMany({ where: { pondId: id }, orderBy: { measuredAt: 'desc' }, include: { worker: { select: { id: true, name: true, email: true } } } }),
+  ]);
+
+  const latestWater = waterLogs[0] || null;
+  const latestFeeding = feedLogs[0] || null;
+  const latestGrowth = growthMeasurements[0] || null;
+
+  const totalFeedKg = feedLogs.reduce((sum: number, log: FeedingLog) => sum + (log.quantityKg || 0), 0);
+  const totalMortality = mortalityLogs.reduce((sum: number, log: MortalityLog) => sum + (log.numberDead || 0), 0);
+  const totalHarvested = harvestLogs.reduce((sum: number, h: HarvestLog) => sum + (h.numberHarvested || 0), 0);
+
+  const initialStock = pond.initial_population ?? pond.current_population ?? 0;
+  const currentLive = initialStock - totalMortality - totalHarvested;
+
+  const fedToday = feedLogs.some((f: FeedingLog) => new Date(f.date) >= today);
+  const todayFeedKg = feedLogs.filter((f: FeedingLog) => new Date(f.date) >= today).reduce((s: number, f: FeedingLog) => s + (f.quantityKg || 0), 0);
+  const todayMortality = mortalityLogs.filter((m: MortalityLog) => new Date(m.observedAt) >= today).reduce((s: number, m: MortalityLog) => s + (m.numberDead || 0), 0);
+
+  const latestFeedSize = latestFeeding?.feedSize || null;
+  const recommendedFeedSize = getRecommendedFeedSize(latestGrowth?.avgWeightGrams ?? pond.initialAvgWeightG ?? null);
+  const todayFeedLogs = feedLogs.filter((f: FeedingLog) => new Date(f.date) >= today);
+
   const summary = {
+    totalFeedKg,
+    totalMortality,
+    totalHarvested,
+    currentLive,
+    fedToday,
     todayFeedKg,
+    todayFeedLogs: todayFeedLogs.map((log: FeedingLog & { worker?: any }) => ({
+      id: log.id,
+      date: log.date,
+      quantityKg: log.quantityKg,
+      feedType: log.feedType,
+      feedSize: log.feedSize,
+      appetite: log.appetite,
+      observation: log.observation,
+      worker: log.worker,
+    })),
     todayMortality,
-    fedToday: todayFeedKg > 0,
     appetite: latestFeeding?.appetite ?? null,
     behavior: latestFeeding?.observation || null,
     reactive: latestFeeding?.appetite ? latestFeeding.appetite >= 4 : null,
+    latestFeedSize,
+    latestFeedType: latestFeeding?.feedType || null,
+    recommendedFeedSize,
     ph: latestWater?.ph ?? null,
     dissolvedO2: latestWater?.dissolvedO2 ?? null,
     ammonia: latestWater?.ammonia ?? null,
     waterIssue: latestWater ? Boolean((latestWater.ph && (latestWater.ph < 6.5 || latestWater.ph > 8.5)) || (latestWater.dissolvedO2 && latestWater.dissolvedO2 < 5) || (latestWater.ammonia && latestWater.ammonia > 0.05)) : false,
     waterAddedPercent: latestWater?.waterAddedPercent ?? null,
     waterRemovedPercent: latestWater?.waterRemovedPercent ?? null,
-    lastUpdatedBy: latestFeeding?.worker || latestWater?.worker || pond.mortalityLogs[0]?.worker || null,
-    lastUpdatedAt: latestFeeding?.date || latestWater?.measuredAt || pond.mortalityLogs[0]?.observedAt || null,
+    lastUpdatedBy: latestFeeding?.worker || latestWater?.worker || latestGrowth?.worker || (mortalityLogs[0]?.worker ?? null),
+    lastUpdatedAt: latestFeeding?.date || latestWater?.measuredAt || latestGrowth?.measuredAt || (mortalityLogs[0]?.observedAt ?? null),
     harvest: buildHarvestProjection(pond),
+    growthHistory: growthMeasurements.map((g) => ({ measuredAt: g.measuredAt, avgWeightGrams: g.avgWeightGrams, worker: g.worker })),
+    harvestHistory: harvestLogs.map((h) => ({ recordedAt: h.recordedAt, numberHarvested: h.numberHarvested, avgWeightGrams: h.avgWeightGrams, biomassKg: h.biomassKg })),
   };
 
-  res.json({ pond, summary });
+  res.json({ pond: { ...pond, feedLogs, mortalityLogs, harvestLogs, growthMeasurements }, summary });
 }
 
 export async function createPond(req: AuthRequest, res: Response) {
@@ -184,10 +239,51 @@ export async function updatePond(req: AuthRequest, res: Response) {
 
 export async function deletePond(req: AuthRequest, res: Response) {
   const { id } = req.params;
+
   try {
-    await prisma.pond.delete({ where: { id } });
+    const [feedLogs, waterLogs, mortalityLogs, harvestLogs, growthMeasurements, attachments] = await Promise.all([
+      prisma.feedingLog.findMany({ where: { pondId: id }, select: { id: true } }),
+      prisma.waterQualityLog.findMany({ where: { pondId: id }, select: { id: true } }),
+      prisma.mortalityLog.findMany({ where: { pondId: id }, select: { id: true } }),
+      prisma.harvestLog.findMany({ where: { pondId: id }, select: { id: true } }),
+      prisma.growthMeasurement.findMany({ where: { pondId: id }, select: { id: true } }),
+      prisma.attachment.findMany({ where: { pondId: id }, select: { id: true } }),
+    ]);
+
+    const feedIds = feedLogs.map((entry) => entry.id);
+    const waterIds = waterLogs.map((entry) => entry.id);
+    const mortalityIds = mortalityLogs.map((entry) => entry.id);
+    const harvestIds = harvestLogs.map((entry) => entry.id);
+    const growthIds = growthMeasurements.map((entry) => entry.id);
+    const attachmentIds = attachments.map((entry) => entry.id);
+
+    await prisma.$transaction(async (tx) => {
+      if (attachmentIds.length > 0) {
+        await tx.attachment.deleteMany({
+          where: {
+            OR: [
+              { id: { in: attachmentIds } },
+              { feedingLogId: { in: feedIds } },
+              { mortalityLogId: { in: mortalityIds } },
+              { harvestLogId: { in: harvestIds } },
+              { growthMeasurementId: { in: growthIds } },
+            ],
+          },
+        });
+      }
+
+      await tx.financeRecord.deleteMany({ where: { pondId: id } });
+      await tx.feedingLog.deleteMany({ where: { pondId: id } });
+      await tx.waterQualityLog.deleteMany({ where: { pondId: id } });
+      await tx.mortalityLog.deleteMany({ where: { pondId: id } });
+      await tx.harvestLog.deleteMany({ where: { pondId: id } });
+      await tx.growthMeasurement.deleteMany({ where: { pondId: id } });
+      await tx.pond.delete({ where: { id } });
+    });
+
     res.status(204).send();
   } catch (e) {
+    console.error('Pond deletion failed', e);
     res.status(400).json({ error: 'Pond cannot be deleted while it has related records. Archive it instead or remove related records first.' });
   }
 }
