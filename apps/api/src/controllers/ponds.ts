@@ -33,7 +33,40 @@ function buildHarvestProjection(pond: {
   initialAvgWeightG: number | null;
   targetHarvestKg: number | null;
   expectedGrowthGDay: number | null;
+  targetHarvestDate?: Date | null;
 }) {
+  // If an explicit target date is set for the pond, prefer that for scheduling
+  if (pond.targetHarvestDate) {
+    const expectedHarvestDate = new Date(pond.targetHarvestDate);
+    const daysRemaining = Math.ceil((expectedHarvestDate.getTime() - Date.now()) / 86400000);
+
+    // If weight growth parameters exist, estimate current weight and progress
+    let estimatedCurrentWeightG: number | null = null;
+    let progressPercent: number | null = null;
+    if (pond.initialAvgWeightG != null && pond.expectedGrowthGDay != null) {
+      if (pond.stockedAt) {
+        const daysSinceStocking = Math.max(0, Math.floor((Date.now() - pond.stockedAt.getTime()) / 86400000));
+        estimatedCurrentWeightG = pond.initialAvgWeightG + daysSinceStocking * pond.expectedGrowthGDay;
+      } else {
+        estimatedCurrentWeightG = pond.initialAvgWeightG;
+      }
+      if (pond.targetHarvestKg) {
+        const targetWeightG = pond.targetHarvestKg * 1000;
+        progressPercent = Number(Math.min(100, (estimatedCurrentWeightG / targetWeightG) * 100).toFixed(1));
+      }
+    }
+
+    return {
+      targetWeightKg: pond.targetHarvestKg ?? null,
+      expectedHarvestDate,
+      daysToTarget: null,
+      daysRemaining,
+      estimatedCurrentWeightG: estimatedCurrentWeightG != null ? Number(estimatedCurrentWeightG.toFixed(1)) : null,
+      progressPercent,
+    };
+  }
+
+  // Fallback: compute expected date based on stockedAt, growth rate and target weight
   if (!pond.stockedAt || !pond.initialAvgWeightG || !pond.targetHarvestKg || !pond.expectedGrowthGDay) {
     return null;
   }

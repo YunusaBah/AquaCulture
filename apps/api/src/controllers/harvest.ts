@@ -30,8 +30,7 @@ export async function createHarvest(req: AuthRequest, res: Response) {
   if (numberHarvested < 0) return res.status(400).json({ error: 'Invalid harvest quantity' });
 
   if (req.userRole === 'WORKER') {
-    const pond = await prisma.pond.findUnique({ where: { id: pondId }, select: { assignedUserId: true } });
-    if (!pond || pond.assignedUserId !== req.userId) return res.status(403).json({ error: 'Forbidden' });
+    return res.status(403).json({ error: 'Workers are not allowed to create harvests' });
   }
 
   // ensure pond exists
@@ -83,4 +82,32 @@ export async function createHarvest(req: AuthRequest, res: Response) {
   }
 
   res.status(201).json({ harvest });
+}
+
+export async function deleteHarvest(req: AuthRequest, res: Response) {
+  const { id } = req.params as { id?: string };
+  if (!id) return res.status(400).json({ error: 'harvest id required' });
+
+  const harvest = await prisma.harvestLog.findUnique({ where: { id } });
+  if (!harvest) return res.status(404).json({ error: 'Harvest not found' });
+
+  // workers may only delete their own harvest records
+  if (req.userRole === 'WORKER' && harvest.workerId !== req.userId) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      const t = tx as any;
+      // restore pond population
+      await t.pond.update({ where: { id: harvest.pondId }, data: { current_population: { increment: harvest.numberHarvested } } });
+      // remove the harvest record
+      await t.harvestLog.delete({ where: { id } });
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to undo harvest';
+    return res.status(400).json({ error: message });
+  }
+
+  res.json({ success: true });
 }

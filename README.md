@@ -1,6 +1,6 @@
 # AquaSphere
 
-AquaSphere is a mobile-first aquaculture farm management platform designed for fish farming operations, field workflows, stock monitoring, task tracking, owner-only financial oversight, and AI-assisted operational insights.
+AquaSphere is a mobile-first aquaculture farm management platform designed for fish farming operations, field workflows, stock monitoring, task tracking, and owner-only financial oversight.
 
 ## Stack
 
@@ -133,7 +133,7 @@ Instead of thinking about "one website," think about a complete platform.
                       │
       ┌───────────────┼────────────────┐
       │               │                │
- Dashboard      REST API          AI Engine
+ Dashboard      REST API          Processing Engine
       │               │                │
       └───────────────┼────────────────┘
                       │
@@ -290,21 +290,6 @@ buyers
 
 ---
 
-## AI
-
-```text
-ai_reports
-
-ai_summaries
-
-ai_conversations
-
-ai_recommendations
-```
-
-Instead of storing AI text inside mortality or feeding records, AI outputs become their own records. That lets you review AI history later.
-
----
 
 ## Security
 
@@ -387,9 +372,6 @@ Pending Tasks
 
 ─────────────────────────────────────
 
-AI Recommendation
-
-Pond 7 requires immediate oxygen test.
 ```
 
 ---
@@ -506,37 +488,6 @@ From here, users can add a feeding, record a mortality, log water quality, uploa
 
 ---
 
-# AI Assistant
-
-Imagine a worker enters:
-
-```text
-Fed Pond 3
-
-Fish were less active
-
-Water green
-
-Five fish dead
-```
-
-The AI responds:
-
-```text
-Suggested Observation
-
-Fish activity decreased during feeding.
-
-Five mortalities were observed.
-
-The water appeared green, which may indicate an algae bloom.
-
-Recommend checking dissolved oxygen and ammonia before the next feeding and continue close monitoring for the next 24 hours.
-```
-
-The worker can edit or accept the suggestion before saving it.
-
----
 
 # Notifications
 
@@ -607,7 +558,6 @@ feature/inventory
 
 feature/finance
 
-feature/ai
 
 feature/reports
 
@@ -655,7 +605,6 @@ This is the roadmap I propose:
 
 * Offline mode
 * Notifications
-* AI assistant
 
 ### Milestone 6
 
@@ -690,7 +639,6 @@ Focus:
 * Expenses
 * Profit
 * Farm health score
-* AI summaries
 * Alerts across all farms
 * Worker performance
 * Monthly trends
@@ -741,11 +689,10 @@ Focus:
 * Supplier activity
 * Consumption by farm and pond
 
-## AI / Insights Dashboard
+## Insights Dashboard
 
 Focus:
 
-* AI summaries
 * Risk warnings
 * Suggested actions
 * Disease guidance
@@ -766,63 +713,6 @@ Focus:
 
 ---
 
-# 11. Free AI Integration Strategy
-
-If we want a free AI that still feels professional, the best approach is to use an **AI provider abstraction** instead of hard-coding one model.
-
-## Recommended Default
-
-**Ollama** running locally or on your own server.
-
-Why:
-
-* Free to use
-* Open-source
-* Works offline
-* Easy to integrate through HTTP
-* Can use strong open models like Llama, Qwen, or Mistral
-* Fits the offline-first philosophy of AquaSphere
-
-## Best Integration Pattern
-
-Use a provider layer like this:
-
-* `local-ollama` for free self-hosted AI
-* `groq` for very fast hosted inference when available
-* `huggingface` for fallback models
-* `openai-compatible` interface for future flexibility
-
-## What AI Should Do
-
-* Summarize observations
-* Rewrite worker notes professionally
-* Explain water quality values
-* Suggest likely causes
-* Draft daily and weekly reports
-* Generate alerts and recommendations
-* Assist with disease identification as guidance only
-
-## What AI Must Not Do
-
-* Change farm records automatically
-* Make medical decisions
-* Delete or edit history without user approval
-* Replace professional vet or manager review
-
-## Best Practice
-
-Store AI output as first-class records:
-
-* `ai_conversations`
-* `ai_messages`
-* `ai_reports`
-* `ai_insights`
-* `ai_recommendations`
-
-That way, the system keeps an audit trail and the AI becomes part of the product, not a disposable chatbot.
-
----
-
 # 12. World-Standard Product Direction
 
 If we build AquaSphere correctly, it should feel like an enterprise platform from day one:
@@ -833,7 +723,6 @@ If we build AquaSphere correctly, it should feel like an enterprise platform fro
 * Strong audit logging
 * Real-time notifications
 * Structured reports
-* AI assistance with human approval
 * Multi-farm support
 * Clean design system
 * Scalable database design
@@ -842,7 +731,7 @@ That means the next implementation step is not random UI pages. It is:
 
 1. Finalize the ERD
 2. Confirm dashboard roles and widgets
-3. Define the AI provider abstraction
+3. Define the provider abstraction
 4. Then build the frontend and APIs from that blueprint
 
 

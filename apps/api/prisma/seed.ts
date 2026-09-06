@@ -175,20 +175,6 @@ async function main() {
     create: { id: `demo-assignment-${worker.id}`, taskId: task.id, userId: worker.id },
   });
 
-  await prisma.aiReport.upsert({
-    where: { id: 'demo-ai-report-pond-7' },
-    update: {
-      title: 'Pond 7 oxygen review',
-      content: 'Pond 7 shows reduced appetite risk. Check dissolved oxygen and ammonia before the next feed cycle.',
-      userId: owner.id,
-    },
-    create: {
-      id: 'demo-ai-report-pond-7',
-      title: 'Pond 7 oxygen review',
-      content: 'Pond 7 shows reduced appetite risk. Check dissolved oxygen and ammonia before the next feed cycle.',
-      userId: owner.id,
-    },
-  });
 
   const financeRecords = [
     { id: 'demo-finance-feed', type: 'EXPENSE', category: 'Feed', description: 'Purchased feed', quantity: 100, unit: 'bags', unitPrice: 950, amount: 95000 },

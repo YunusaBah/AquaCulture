@@ -46,8 +46,6 @@ export const ROLE_PERMISSIONS: Record<RoleName, string[]> = {
     'USER_ROLE_MANAGE',
     'REPORT_VIEW',
     'REPORT_EXPORT',
-    'AI_VIEW',
-    'AI_USE',
     'AUDIT_VIEW',
   ],
   WORKER: [
@@ -66,7 +64,6 @@ export const ROLE_PERMISSIONS: Record<RoleName, string[]> = {
     'TASK_VIEW_ASSIGNED',
     'TASK_COMPLETE',
     'TASK_COMMENT',
-    'AI_USE',
     'ATTACHMENT_CREATE',
   ],
 };

@@ -57,6 +57,46 @@
   font-weight: 800;
 }
 
+/* Calendar styles for harvest scheduling */
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 8px;
+  margin-top: 12px;
+}
+.calendar-head {
+  text-align: center;
+  font-weight: 800;
+  color: var(--muted);
+}
+.calendar-day {
+  min-height: 110px;
+  border: 1px solid rgba(15,23,42,0.06);
+  border-radius: 8px;
+  padding: 8px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+}
+.calendar-day.today {
+  box-shadow: 0 6px 18px rgba(21,101,192,0.06);
+  border-color: rgba(21,101,192,0.15);
+}
+.calendar-day-num {
+  font-weight: 800;
+  margin-bottom: 6px;
+}
+.calendar-events { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+.calendar-event { padding: 6px 8px; border-radius: 6px; font-size: 0.85rem; color: #fff; }
+.calendar-event.scheduled { background: linear-gradient(135deg, rgba(21,101,192,0.9), rgba(46,125,50,0.9)); }
+.calendar-event.harvest { background: linear-gradient(135deg, rgba(244,67,54,0.9), rgba(245,124,0,0.9)); }
+.more-count { font-size: 0.85rem; color: var(--muted); }
+
+@media (max-width: 900px) {
+  .calendar-grid { grid-template-columns: repeat(7, 1fr); }
+  .calendar-day { min-height: 90px; }
+}
+
 * {
   box-sizing: border-box;
 }
@@ -595,69 +635,15 @@ button {
 }
 
 .dashboard-grid {
-  grid-template-columns: minmax(0, 1.25fr) minmax(310px, 0.75fr);
+  /* Make the right column (pond detail / update panel) wider than the registry column */
+  grid-template-columns: minmax(0, 0.9fr) minmax(360px, 1.4fr);
 }
 
 .dashboard-grid.wide-left {
-  grid-template-columns: minmax(0, 1.55fr) minmax(300px, 0.65fr);
+  /* Preserve a wider right column on 'wide-left' layout as well */
+  grid-template-columns: minmax(0, 0.85fr) minmax(380px, 1.55fr);
 }
 
-.logistics-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
-}
-
-.logistics-card {
-  display: grid;
-  gap: 8px;
-  padding: 18px 16px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  border-radius: 14px;
-  background: linear-gradient(135deg, rgba(21, 101, 192, 0.04), rgba(46, 125, 50, 0.02));
-}
-
-.logistics-card.highlight {
-  background: linear-gradient(135deg, rgba(21, 101, 192, 0.1), rgba(46, 125, 50, 0.07));
-}
-
-.logistics-card span,
-.logistics-card small {
-  color: var(--muted);
-}
-
-.logistics-card strong {
-  color: var(--ink);
-  font-size: 1.8rem;
-  line-height: 1.1;
-}
-
-.logistics-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-}
-
-.logistics-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.mini-btn {
-  min-height: 32px;
-  padding: 7px 10px;
-  font-size: 0.8rem;
-}
-
-.logistics-meta {
-  display: grid;
-  gap: 4px;
-  text-align: right;
-  color: var(--muted);
-  font-size: 0.8rem;
-}
 
 .metric-card,
 .panel {
@@ -875,25 +861,45 @@ button {
 
 .compact-form {
   display: grid;
-  grid-template-columns: repeat(5, minmax(110px, 1fr)) auto;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 10px;
   margin-bottom: 14px;
+  align-items: center;
 }
 
 .inventory-form,
 .inventory-adjust-form {
-  grid-template-columns: repeat(6, minmax(120px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
 }
 
 .inventory-adjust-form {
   margin-top: 8px;
 }
 
+/* Ensure action buttons in compact forms sit to the right and don't wrap */
+.compact-form .primary-btn,
+.inventory-adjust-form .primary-btn,
+.inventory-form .primary-btn {
+  justify-self: end;
+  white-space: nowrap;
+}
+
+/* Slightly reduce primary button padding on very small screens */
+@media (max-width: 560px) {
+  .primary-btn {
+    padding: 8px 10px;
+    min-height: 38px;
+    font-size: 0.95rem;
+  }
+}
+
 .inventory-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
+  gap: 16px;
   margin-top: 14px;
+  align-items: start; /* ensure cards are top-aligned */
+  grid-auto-rows: minmax(0, auto);
 }
 
 .inventory-card {
@@ -904,6 +910,7 @@ button {
   border-radius: 12px;
   background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
   padding: 14px;
+  align-self: start; /* prevent stretching and keep top alignment */
 }
 
 .inventory-card.danger {
@@ -1023,6 +1030,26 @@ button {
   box-shadow: 0 8px 16px rgba(15, 23, 42, 0.02);
 }
 
+/* compact variant used for worker pond registry cards */
+.pond-card.compact {
+  padding: 8px 10px;
+  border-left-width: 3px;
+  background: #fff;
+  box-shadow: none;
+  align-items: center;
+}
+.pond-card.compact strong {
+  font-size: 0.98rem;
+}
+.pond-card.compact span {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.pond-card.compact .pond-stats span {
+  padding: 4px 7px;
+  font-size: 0.72rem;
+}
+
 .pond-button {
   width: 100%;
   text-align: left;
@@ -1139,6 +1166,33 @@ button {
   border-radius: 12px;
   padding: 8px 18px 0;
   box-shadow: 0 2px 10px rgba(15, 23, 42, 0.02);
+}
+
+/* larger, more prominent styling for worker pond update panel */
+.pond-detail.worker-large {
+  padding: 18px 22px 14px;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.12);
+  border-left: 4px solid var(--accent-teal);
+}
+.pond-detail.worker-large svg {
+  width: 48px;
+  height: 48px;
+  margin: 8px 0 10px;
+}
+.pond-detail.worker-large > div {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+.pond-detail.worker-large strong {
+  font-size: 1.12rem;
+}
+.pond-detail.worker-large .worker-log-form input,
+.pond-detail.worker-large .worker-log-form select,
+.pond-detail.worker-large .worker-log-form textarea {
+  padding: 12px 14px;
+  font-size: 1rem;
+}
+.pond-detail.worker-large .primary-btn {
+  padding: 11px 14px;
 }
 
 .pond-detail svg {
@@ -1316,33 +1370,6 @@ button {
   margin-bottom: 12px;
 }
 
-.floating-ai-panel {
-  position: fixed;
-  right: 24px;
-  bottom: 24px;
-  width: min(420px, calc(100vw - 32px));
-  max-height: min(70vh, 560px);
-  display: grid;
-  gap: 12px;
-  padding: 16px;
-  border: 1px solid rgba(21, 101, 192, 0.18);
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.98);
-  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.18);
-  z-index: 40;
-}
-
-.floating-ai-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.floating-ai-header strong {
-  color: var(--ink);
-}
-
 .collapse-btn {
   width: 32px;
   height: 32px;
@@ -1353,40 +1380,8 @@ button {
   font-size: 1.3rem;
 }
 
-.floating-ai-toggle {
-  position: fixed;
-  right: 22px;
-  bottom: 22px;
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  border: none;
-  border-radius: 999px;
-  padding: 12px 16px;
-  background: linear-gradient(135deg, var(--ocean), var(--green));
-  color: #fff;
-  box-shadow: 0 20px 35px rgba(21, 101, 192, 0.28);
-  font-weight: 800;
-  z-index: 35;
-}
-
 .floating-note {
   min-height: 110px;
-}
-
-.ai-actions {
-  margin-bottom: 12px;
-}
-
-.ai-output {
-  margin: 0;
-  white-space: pre-wrap;
-  border-radius: 8px;
-  border: 1px solid rgba(46, 125, 50, 0.2);
-  background: rgba(46, 125, 50, 0.07);
-  padding: 14px;
-  color: var(--ink);
-  font-family: Inter, "Segoe UI", Arial, sans-serif;
 }
 
 @media (max-width: 1120px) {
@@ -1516,16 +1511,4 @@ button {
     display: grid;
   }
 
-  .floating-ai-panel {
-    right: 12px;
-    left: 12px;
-    width: auto;
-    max-width: none;
-  }
-
-  .floating-ai-toggle {
-    right: 12px;
-    left: 12px;
-    justify-content: center;
-  }
 }

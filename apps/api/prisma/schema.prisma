@@ -28,9 +28,6 @@ model User {
   mortalityLogs   MortalityLog[]
   harvestLogs     HarvestLog[]
   growthMeasurements GrowthMeasurement[]
-  aiReports       AiReport[]
-  aiConversations AiConversation[]
-  aiMessages      AiMessage[]
   uploads         Attachment[]
   sessions        Session[]
   auditLogs       AuditLog[]
@@ -98,6 +95,7 @@ model Pond {
   stockedAt          DateTime?
   initialAvgWeightG  Float?
   targetHarvestKg    Float?
+  targetHarvestDate  DateTime?
   expectedGrowthGDay Float?
   status             PondStatus        @default(ACTIVE)
   current_batch      FishBatch?        @relation(fields: [current_batchId], references: [id])
@@ -199,7 +197,6 @@ model MortalityLog {
   attachments   Attachment[]
   worker        User?        @relation(fields: [workerId], references: [id])
   workerId      String?
-  aiReports     AiReport[]
 }
 
 model HarvestLog {
@@ -249,50 +246,8 @@ model InventoryTransaction {
   createdAt DateTime      @default(now())
 }
 
-model AiReport {
-  id             String          @id @default(uuid())
-  title          String?
-  content        String
-  createdAt      DateTime        @default(now())
-  sourceId       String?
-  sourceType     String?
-  user           User?           @relation(fields: [userId], references: [id])
-  userId         String?
-  mortalityLogId String?
-  mortalityLog   MortalityLog?   @relation(fields: [mortalityLogId], references: [id])
-  conversationId String?
-  conversation   AiConversation? @relation(fields: [conversationId], references: [id])
-  AiMessage      AiMessage[]
-}
 
-model AiConversation {
-  id        String      @id @default(uuid())
-  title     String?
-  user      User?       @relation(fields: [userId], references: [id])
-  userId    String?
-  messages  AiMessage[]
-  createdAt DateTime    @default(now())
-  AiReport  AiReport[]
-}
 
-model AiMessage {
-  id             String         @id @default(uuid())
-  conversation   AiConversation @relation(fields: [conversationId], references: [id])
-  conversationId String
-  role           AiRole
-  content        String
-  createdAt      DateTime       @default(now())
-  aiReport       AiReport?      @relation(fields: [aiReportId], references: [id])
-  aiReportId     String?
-  user           User?          @relation(fields: [userId], references: [id])
-  userId         String?
-}
-
-enum AiRole {
-  SYSTEM
-  USER
-  ASSISTANT
-}
 
 model Attachment {
   id             String        @id @default(uuid())

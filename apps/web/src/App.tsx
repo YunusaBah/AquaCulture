@@ -16,7 +16,6 @@ import {
   Trash2,
   TrendingDown,
   TrendingUp,
-  Truck,
   Upload,
   Wallet,
 } from 'lucide-react';
@@ -37,7 +36,6 @@ type ApiState = {
   mortalityLogs: any[];
   inventoryItems: any[];
   tasks: any[];
-  aiReports: any[];
   notifications: any[];
   finance: any | null;
   financeRecords: any[];
@@ -51,7 +49,6 @@ const emptyState: ApiState = {
   mortalityLogs: [],
   inventoryItems: [],
   tasks: [],
-  aiReports: [],
   notifications: [],
   finance: null,
   financeRecords: [],
@@ -60,18 +57,16 @@ const emptyState: ApiState = {
 const ownerNav = [
   { id: 'command', label: 'Owner Dashboard', icon: Activity },
   { id: 'ponds', label: 'Ponds', icon: Fish },
-  { id: 'logistics', label: 'Logistics', icon: Truck },
   { id: 'tasks', label: 'Tasks', icon: ClipboardList },
   { id: 'finance', label: 'Finance', icon: Wallet },
   { id: 'inventory', label: 'Inventory', icon: Package },
-  { id: 'ai', label: 'AI Assistant', icon: BrainCircuit },
+  { id: 'harvests', label: 'Harvests', icon: CalendarClock },
 ];
 
 const workerNav = [
   { id: 'command', label: "Today's Work", icon: ClipboardList },
   { id: 'ponds', label: 'My Ponds', icon: Fish },
   { id: 'tasks', label: 'Tasks', icon: ClipboardList },
-  { id: 'ai', label: 'AI Field Help', icon: BrainCircuit },
 ];
 
 function formatDalasi(value: number) {
@@ -94,49 +89,6 @@ function getRecommendedFeedSize(avgWeightGrams?: number | null) {
   return '4.5mm';
 }
 
-function buildAiSuggestion(note: string) {
-  const clean = note.trim();
-  if (!clean) return 'Record an observation to generate a professional draft.';
-
-  const lowered = clean.toLowerCase();
-  const hasMortality = lowered.includes('dead') || lowered.includes('mortality') || lowered.includes('die');
-  const hasWaterIssue = lowered.includes('green') || lowered.includes('cloudy') || lowered.includes('muddy') || lowered.includes('water');
-  const hasLowActivity = lowered.includes('less active') || lowered.includes('inactive') || lowered.includes('slow') || lowered.includes('weak');
-  const hasFeedIssue = lowered.includes('feed') || lowered.includes('appetite') || lowered.includes('eat') || lowered.includes('ration');
-  const hasOxygen = lowered.includes('oxygen') || lowered.includes('dissolved') || lowered.includes('gasping') || lowered.includes('stress');
-  const hasDiseaseClue = lowered.includes('lesion') || lowered.includes('spot') || lowered.includes('fungus') || lowered.includes('tail');
-  const hasAlgae = lowered.includes('algae') || lowered.includes('green water') || lowered.includes('bloom');
-
-  let recommendation = `Suggested observation:\n${clean}\n\nOperational response: compare the latest water values with yesterday's readings before the next feeding cycle. Keep the note concise, document the current condition, and schedule a follow-up check in the next 12-24 hours.`;
-
-  if (hasMortality) {
-    recommendation = `Suggested observation:\n${clean}\n\nMortality risk is elevated. Check dissolved oxygen, ammonia, and feed delivery immediately, then inspect the affected area for signs of crowding or poor water circulation before the next feeding.`;
-  }
-  if (hasWaterIssue && !hasMortality) {
-    recommendation = `Suggested observation:\n${clean}\n\nWater quality is likely contributing to the change. Review clarity, dissolved oxygen, and ammonia first, then reduce feed load and plan a water exchange check before the next cycle.`;
-  }
-  if (hasLowActivity) {
-    recommendation = `Suggested observation:\n${clean}\n\nFish behavior suggests stress or declining conditions. Reduce feed briefly, verify oxygen saturation, and compare this pond with the previous 24 hours of activity before increasing the ration again.`;
-  }
-  if (hasFeedIssue && !hasLowActivity) {
-    recommendation = `Suggested observation:\n${clean}\n\nFeeding response is inconsistent. Check feed quality, compare appetite with nearby ponds, and slightly reduce the next ration until the feed pattern stabilizes.`;
-  }
-  if (hasOxygen) {
-    recommendation = `Suggested observation:\n${clean}\n\nOxygen risk is the likely priority. Measure early-morning dissolved oxygen, confirm aeration performance, and delay heavy feeding until readings are stable and consistent.`;
-  }
-  if (hasDiseaseClue) {
-    recommendation = `Suggested observation:\n${clean}\n\nVisible health signs require targeted follow-up. Separate affected fish if needed, review recent water quality changes, and escalate for veterinary or technical inspection if the condition persists or spreads.`;
-  }
-  if (hasAlgae) {
-    recommendation = `Suggested observation:\n${clean}\n\nThe pond appears to have water-quality drift. Reduce feed, check algae loading, and verify dissolved oxygen and circulation before continuing a normal feeding plan.`;
-  }
-
-  const closure = (hasMortality || hasOxygen || hasDiseaseClue)
-    ? 'Escalate with a clear note if the condition worsens or spreads.'
-    : 'Manager approval is required before treatment or large operational changes.';
-
-  return `${recommendation}\n\n${closure}`;
-}
 
 function App() {
   const apiBaseUrl = import.meta.env.VITE_API_URL || '/api';
@@ -150,7 +102,6 @@ function App() {
   const [error, setError] = useState('');
   const [activeNav, setActiveNav] = useState('command');
   const [sidebarOpen, setSidebarOpen] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth > 1120));
-  const [aiOpen, setAiOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<ApiState>(emptyState);
   const [fieldNote, setFieldNote] = useState('Fed Pond 3. Fish appetite was strong. No dead fish. Water level normal.');
@@ -162,9 +113,12 @@ function App() {
   const [modalTask, setModalTask] = useState<any | null>(null);
   const [isOnline, setIsOnline] = useState<boolean>(() => (typeof navigator === 'undefined' ? true : navigator.onLine));
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
-  const [aiSuggestion, setAiSuggestion] = useState('');
-  const [aiLoading, setAiLoading] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+
+  // Owner harvest recording UI state
+  const [showHarvestForm, setShowHarvestForm] = useState(false);
+  const [harvestForm, setHarvestForm] = useState({ numberHarvested: '', avgWeightGrams: '', biomassKg: '', method: '', destination: '' });
+  const [lastCreatedHarvest, setLastCreatedHarvest] = useState<{ id: string; pondId: string; numberHarvested: number } | null>(null);
   const defaultPondLogForm = {
     feedKg: '',
     feedSize: '4mm',
@@ -290,6 +244,14 @@ function App() {
     }
   }, []);
 
+  // auto-dismiss toasts after a short delay so messages don't stick
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  useEffect(() => {
+    if (!toastMessage) return;
+    const id = setTimeout(() => setToastMessage(null), 6000);
+    return () => clearTimeout(id);
+  }, [toastMessage]);
+
   const queueOfflineSyncEntry = useCallback((action: string, payload: Record<string, any>, tableName: string, recordId?: string) => {
     if (typeof window === 'undefined') return;
     const entries = readQueuedSyncEntries();
@@ -306,42 +268,11 @@ function App() {
     setPendingSyncCount([...entries, nextEntry].length);
   }, [readQueuedSyncEntries]);
 
-  const generateAiSuggestionText = useCallback(async () => {
-    if (!token || !fieldNote.trim()) {
-      setAiSuggestion(buildAiSuggestion(fieldNote));
-      return;
-    }
-
-    setAiLoading(true);
-    try {
-      const response = await fetch(`${apiBaseUrl}/ai/suggest`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: token ? 'Bearer ' + token : '',
-        },
-        body: JSON.stringify({ note: fieldNote }),
-      });
-
-      if (response.ok) {
-        const body = await response.json();
-        setAiSuggestion(body.suggestion || buildAiSuggestion(fieldNote));
-        return;
-      }
-
-      setAiSuggestion(buildAiSuggestion(fieldNote));
-    } catch (error) {
-      console.error('AI suggestion failed', error);
-      setAiSuggestion(buildAiSuggestion(fieldNote));
-    } finally {
-      setAiLoading(false);
-    }
-  }, [apiBaseUrl, fieldNote, token]);
 
   const loadData = useCallback(async () => {
     if (!token) return;
     const headers = { Authorization: token ? 'Bearer ' + token : '' };
-    const [farmsRes, pondsRes, feedingsRes, waterRes, mortalityRes, harvestsRes, inventoryRes, tasksRes, financeRes, aiRes, notificationsRes] = await Promise.all([
+    const [farmsRes, pondsRes, feedingsRes, waterRes, mortalityRes, harvestsRes, inventoryRes, tasksRes, financeRes, notificationsRes] = await Promise.all([
       fetch(`${apiBaseUrl}/farms`, { headers }),
       fetch(`${apiBaseUrl}/ponds`, { headers }),
       fetch(`${apiBaseUrl}/feedings`, { headers }),
@@ -351,7 +282,6 @@ function App() {
       fetch(`${apiBaseUrl}/inventory`, { headers }),
       fetch(`${apiBaseUrl}/tasks`, { headers }),
       fetch(`${apiBaseUrl}/finance`, { headers }),
-      fetch(`${apiBaseUrl}/ai/reports`, { headers }),
       fetch(`${apiBaseUrl}/notifications`, { headers }),
     ]);
 
@@ -369,10 +299,9 @@ function App() {
       next.finance = finance.dashboard || null;
       next.financeRecords = finance.records || [];
     }
-    if (aiRes.ok) next.aiReports = (await aiRes.json()).reports || [];
     if (notificationsRes.ok) next.notifications = (await notificationsRes.json()).notifications || [];
     // load harvests into state separately (no dedicated place, but overview totals rely on feedings/mortality)
-    if (harvestsRes.ok) {
+      if (harvestsRes.ok) {
       const body = await harvestsRes.json().catch(() => ({}));
       // attach harvests temporarily to data for owner inspection usage
       (next as any).harvests = body.harvests || [];
@@ -546,8 +475,8 @@ function App() {
       }));
     }
 
-    // immediate harvest creation when provided
-    if (Number(pondLogForm.harvestQuantity) > 0) {
+    // immediate harvest creation when provided — only owners may record harvests
+    if (isOwner && Number(pondLogForm.harvestQuantity) > 0) {
       const harvestQtyNum = Number(pondLogForm.harvestQuantity);
       // integrity checks: integer positive
       if (!Number.isInteger(harvestQtyNum) || harvestQtyNum <= 0) {
@@ -567,7 +496,7 @@ function App() {
           const confirmDetails = { harvestQty: harvestQtyNum, biomassKg: biomassVal, currentLive };
           const confirmed = await showHarvestConfirmation(confirmDetails);
           if (!confirmed) {
-            // worker cancelled
+            // cancelled
           } else {
             calls.push(fetch(`${apiBaseUrl}/harvests`, {
               method: 'POST',
@@ -584,6 +513,9 @@ function App() {
           }
         }
       }
+    } else if (Number(pondLogForm.harvestQuantity) > 0) {
+      // worker attempted to create harvest — disallow and inform
+      setToastMessage('Only owners may record harvests. Contact your manager.');
     }
 
     try {
@@ -652,41 +584,6 @@ function App() {
     return { totalFeed, totalMortality, lowStock, finance, healthScore: totalMortality > 10 ? 82 : 96 };
   }, [data]);
 
-  const logistics = useMemo(() => {
-    const feedItems = data.inventoryItems.filter((item) => {
-      const name = String(item.name || '').toLowerCase();
-      const category = String(item.category || '').toLowerCase();
-      return category.includes('feed') || name.includes('feed') || name.includes('pellet') || name.includes('ration');
-    });
-    const totalFeedStock = feedItems.reduce((sum, item) => sum + Number(item.currentStock || 0), 0);
-    const lowFeedStock = feedItems.filter((item) => Number(item.currentStock || 0) <= Number(item.minStock || 0)).length;
-    const feedUsage7d = data.feedings.filter((log) => {
-      const logDate = new Date(log.date || log.createdAt || Date.now());
-      return Date.now() - logDate.getTime() <= 7 * 24 * 60 * 60 * 1000;
-    }).reduce((sum, log) => sum + Number(log.quantityKg || 0), 0);
-    const upcomingHarvests = data.ponds
-      .filter((pond) => pond.stockedAt || pond.targetHarvestKg)
-      .map((pond) => {
-        const targetDate = pond.stockedAt ? new Date(pond.stockedAt) : null;
-        if (targetDate) {
-          targetDate.setDate(targetDate.getDate() + 120);
-        }
-        return {
-          id: pond.id,
-          number: pond.number,
-          site: pond.site?.name || 'Site',
-          currentLive: Number(pond.current_population ?? pond.initial_population ?? 0),
-          targetDate: targetDate ? targetDate.toISOString() : null,
-          targetHarvestKg: Number(pond.targetHarvestKg || 0),
-          assignedUser: pond.assignedUser?.name || 'Unassigned',
-          assignedUserId: pond.assignedUser?.id || null,
-        };
-      })
-      .sort((a, b) => (a.targetDate || '').localeCompare(b.targetDate || ''))
-      .slice(0, 4);
-
-    return { feedItems, totalFeedStock, lowFeedStock, feedUsage7d, upcomingHarvests };
-  }, [data]);
 
   const feedRecommendations = useMemo(() => data.ponds
     .map((pond) => {
@@ -820,12 +717,11 @@ function App() {
     }
   }
 
-  const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; type: 'pond' | 'finance' | null; id?: string; label?: string }>({ open: false, type: null });
-  const [logisticsDispatch, setLogisticsDispatch] = useState<Record<string, string>>({});
+  const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; type: 'pond' | 'finance' | 'inventory' | null; id?: string; label?: string }>({ open: false, type: null });
   const [taskComment, setTaskComment] = useState('');
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [recentlyDeleted, setRecentlyDeleted] = useState<{ item: any; timeoutId?: number } | null>(null);
 
-  function showDeleteConfirmation(type: 'pond' | 'finance', id: string, label: string) {
+  function showDeleteConfirmation(type: 'pond' | 'finance' | 'inventory', id: string, label: string) {
     setDeleteConfirm({ open: true, type, id, label });
   }
 
@@ -855,6 +751,104 @@ function App() {
     const response = await fetch(`${apiBaseUrl}/finance/${id}`, { method: 'DELETE', headers: { Authorization: token ? 'Bearer ' + token : '' } });
     if (response.ok) await loadData();
     cancelDeleteConfirmation();
+  }
+
+  async function deleteInventoryItem(id: string) {
+    if (!token || !isOwner) return;
+    // find item data so we can restore if user undoes
+    const item = data.inventoryItems.find((it) => it.id === id);
+    if (!item) {
+      cancelDeleteConfirmation();
+      return;
+    }
+
+    const response = await fetch(`${apiBaseUrl}/inventory/${id}`, { method: 'DELETE', headers: { Authorization: token ? 'Bearer ' + token : '' } });
+    if (response.ok) {
+      // keep backup to allow undo
+      const timeoutId = window.setTimeout(() => {
+        setRecentlyDeleted(null);
+      }, 10000);
+      setRecentlyDeleted({ item, timeoutId });
+      setToastMessage(`${item.name} deleted — Undo`);
+      // optimistically reload list so UI updates immediately
+      await loadData();
+    } else {
+      setToastMessage('Unable to delete item');
+    }
+    cancelDeleteConfirmation();
+  }
+
+  async function undoDeleteInventory() {
+    if (!recentlyDeleted || !token || !isOwner) return;
+    const { item, timeoutId } = recentlyDeleted;
+    if (timeoutId) window.clearTimeout(timeoutId);
+    // attempt to recreate item using existing fields
+    const body = {
+      name: item.name,
+      category: item.category,
+      unit: item.unit,
+      currentStock: item.currentStock || 0,
+      minStock: item.minStock || 0,
+      sku: item.sku || undefined,
+    };
+    const response = await fetch(`${apiBaseUrl}/inventory`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' }, body: JSON.stringify(body) });
+    if (response.ok) {
+      setToastMessage(`${item.name} restored`);
+      await loadData();
+    } else {
+      setToastMessage('Unable to restore item');
+    }
+    setRecentlyDeleted(null);
+  }
+
+  // owner-only: record harvest form handling and undo
+  async function handleRecordHarvestSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!token || !isOwner || !selectedPondId) return;
+    const num = Number(harvestForm.numberHarvested);
+    if (!Number.isInteger(num) || num <= 0) { setToastMessage('Enter a positive whole number for harvested fish'); return; }
+    const body = {
+      pondId: selectedPondId,
+      numberHarvested: num,
+      avgWeightGrams: harvestForm.avgWeightGrams ? Number(harvestForm.avgWeightGrams) : undefined,
+      biomassKg: harvestForm.biomassKg ? Number(harvestForm.biomassKg) : undefined,
+      method: harvestForm.method || undefined,
+      destination: harvestForm.destination || undefined,
+    };
+    try {
+      const r = await fetch(`${apiBaseUrl}/harvests`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' }, body: JSON.stringify(body) });
+      if (r.ok) {
+        const data = await r.json();
+        setLastCreatedHarvest({ id: data.harvest.id, pondId: data.harvest.pondId, numberHarvested: data.harvest.numberHarvested });
+        setToastMessage(`${data.harvest.numberHarvested} fish recorded — Undo`);
+        setShowHarvestForm(false);
+        setHarvestForm({ numberHarvested: '', avgWeightGrams: '', biomassKg: '', method: '', destination: '' });
+        await loadData();
+      } else {
+        const bodyText = await r.text().catch(() => '');
+        let parsed; try { parsed = JSON.parse(bodyText || '{}'); } catch { parsed = { error: bodyText || r.statusText }; }
+        setToastMessage(parsed.error || parsed.message || `Server error ${r.status}`);
+      }
+    } catch (e) {
+      setToastMessage('Failed to record harvest');
+    }
+  }
+
+  async function undoLastHarvest() {
+    if (!lastCreatedHarvest || !token || !isOwner) return;
+    try {
+      const r = await fetch(`${apiBaseUrl}/harvests/${lastCreatedHarvest.id}`, { method: 'DELETE', headers: { Authorization: token ? 'Bearer ' + token : '' } });
+      if (r.ok) {
+        setToastMessage('Harvest undone');
+        setLastCreatedHarvest(null);
+        await loadData();
+      } else {
+        const bodyText = await r.text().catch(() => ''); let parsed; try { parsed = JSON.parse(bodyText || '{}'); } catch { parsed = { error: bodyText || r.statusText }; }
+        setToastMessage(parsed.error || parsed.message || `Server error ${r.status}`);
+      }
+    } catch (e) {
+      setToastMessage('Failed to undo harvest');
+    }
   }
 
   async function handleCreateFinanceRecord(event: React.FormEvent<HTMLFormElement>) {
@@ -930,79 +924,6 @@ function App() {
     if (response.ok) {
       setInventoryAdjustment({ itemId: '', type: 'ADD', quantity: '', reason: 'Restock' });
       await loadData();
-    }
-  }
-
-  async function restockInventoryItem(itemId: string, quantity: number, reason: string) {
-    if (!token || !isOwner) return;
-    const response = await fetch(`${apiBaseUrl}/inventory/adjust`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' },
-      body: JSON.stringify({
-        itemId,
-        change: Math.abs(quantity),
-        reason,
-      }),
-    });
-
-    if (response.ok) {
-      await loadData();
-    }
-  }
-
-  async function issueFeedToPond(itemId: string, pondId: string, quantity: number) {
-    if (!token || !isOwner || !pondId) return;
-    const pond = data.ponds.find((entry) => entry.id === pondId);
-    const assigneeId = pond?.assignedUser?.id || workers[0]?.id;
-    if (!assigneeId) return;
-
-    const inventoryResponse = await fetch(`${apiBaseUrl}/inventory/adjust`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' },
-      body: JSON.stringify({
-        itemId,
-        change: -Math.abs(quantity),
-        reason: `Feed issued to Pond ${pond?.number || 'selected pond'}`,
-      }),
-    });
-
-    if (!inventoryResponse.ok) return;
-
-    await fetch(`${apiBaseUrl}/tasks`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' },
-      body: JSON.stringify({
-        title: `Feed allocation - Pond ${pond?.number || 'selected pond'}`,
-        description: `Issue ${quantity} kg of feed to Pond ${pond?.number || 'selected pond'} and confirm the feeding plan before the next cycle.`,
-        assigneeIds: [assigneeId],
-        priority: 'HIGH',
-        dueAt: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(),
-      }),
-    });
-
-    await loadData();
-  }
-
-  async function createLogisticsTaskForPond(pond: { id: string; number: number; assignedUserId?: string | null; siteName?: string | null }) {
-    if (!token || !isOwner) return;
-    const assigneeId = pond.assignedUserId || workers[0]?.id;
-    if (!assigneeId) return;
-
-    const response = await fetch(`${apiBaseUrl}/tasks`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' },
-      body: JSON.stringify({
-        title: `Harvest readiness check - Pond ${pond.number}`,
-        description: `Prepare the harvest schedule and field checklist for Pond ${pond.number} at ${pond.siteName || 'farm site'}.`,
-        assigneeIds: [assigneeId],
-        priority: 'HIGH',
-        dueAt: new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString(),
-      }),
-    });
-
-    if (response.ok) {
-      await loadData();
-      setActiveNav('tasks');
     }
   }
 
@@ -1176,6 +1097,132 @@ function App() {
     );
   }
 
+  // Calendar helper component for owner harvests
+  function HarvestCalendar() {
+    const [viewDate, setViewDate] = useState(() => new Date());
+    const [openDay, setOpenDay] = useState<string | null>(null); // yyyy-mm-dd
+    const [scheduleModal, setScheduleModal] = useState<{ open: boolean; pondId?: string; datetime?: string } | null>(null);
+
+    const harvests = (data as any).harvests || [];
+    // build events from scheduled targetHarvestDate on ponds and actual harvest logs
+    const eventsByDate: Record<string, any[]> = {};
+    (data.ponds || []).forEach((p: any) => {
+      if (p.targetHarvestDate) {
+        const d = new Date(p.targetHarvestDate);
+        const key = d.toISOString().slice(0,10);
+        eventsByDate[key] = eventsByDate[key] || [];
+        eventsByDate[key].push({ type: 'scheduled', pond: p, datetime: p.targetHarvestDate });
+      }
+    });
+    harvests.forEach((h: any) => {
+      if (!h.recordedAt) return;
+      const d = new Date(h.recordedAt);
+      const key = d.toISOString().slice(0,10);
+      eventsByDate[key] = eventsByDate[key] || [];
+      eventsByDate[key].push({ type: 'harvest', harvest: h, datetime: h.recordedAt });
+    });
+
+    const startOfMonth = new Date(viewDate.getFullYear(), viewDate.getMonth(), 1);
+    const endOfMonth = new Date(viewDate.getFullYear(), viewDate.getMonth()+1, 0);
+    const startDay = startOfMonth.getDay(); // 0-6
+    const daysInMonth = endOfMonth.getDate();
+
+    const cells: Array<{date: Date|null}> = [];
+    // leading blanks
+    for (let i=0;i<startDay;i++) cells.push({date: null});
+    for (let d=1; d<=daysInMonth; d++) cells.push({ date: new Date(viewDate.getFullYear(), viewDate.getMonth(), d) });
+
+    function openDayModal(dateKey: string) {
+      setOpenDay(dateKey);
+      setScheduleModal(null);
+    }
+
+    function prevMonth() { setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth()-1, 1)); }
+    function nextMonth() { setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth()+1, 1)); }
+
+    return (
+      <Panel eyebrow="Harvests" title="Harvest calendar">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <button className="secondary-btn" type="button" onClick={prevMonth}>&lt;</button>
+            <strong style={{ marginLeft: 8, marginRight: 8 }}>{viewDate.toLocaleString(undefined, { month: 'long', year: 'numeric' })}</strong>
+            <button className="secondary-btn" type="button" onClick={nextMonth}>&gt;</button>
+          </div>
+          <div>
+            <button className="primary-btn" type="button" onClick={() => { setViewDate(new Date()); }}>Today</button>
+          </div>
+        </div>
+
+        <div className="calendar-grid">
+          {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((h) => <div key={h} className="calendar-head">{h}</div>)}
+          {cells.map((cell, idx) => {
+            const key = cell.date ? cell.date.toISOString().slice(0,10) : `blank-${idx}`;
+            const evs = cell.date ? (eventsByDate[key] || []) : [];
+            return (
+              <div key={key} className={`calendar-day ${cell.date && key===new Date().toISOString().slice(0,10) ? 'today' : ''}`} onClick={() => cell.date && openDayModal(key)}>
+                <div className="calendar-day-num">{cell.date ? cell.date.getDate() : ''}</div>
+                <div className="calendar-events">
+                  {evs.slice(0,3).map((e:any,i:number) => (
+                    <div key={i} className={`calendar-event ${e.type==='scheduled' ? 'scheduled' : 'harvest'}` }>
+                      {e.type==='scheduled' ? `Sched: Pond ${e.pond.number}` : `Harvest: ${e.harvest.numberHarvested} (${new Date(e.datetime).toLocaleTimeString()})`}
+                    </div>
+                  ))}
+                  {evs.length>3 ? <div className="more-count">+{evs.length-3} more</div> : null}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {openDay ? (
+          <div className="modal-backdrop">
+            <div className="modal modal-md">
+              <h3>Events on {openDay}</h3>
+              <div style={{ maxHeight: 260, overflow: 'auto' }}>
+                {(eventsByDate[openDay] || []).map((e:any, i:number) => (
+                  <div key={i} className="record-row">
+                    <div>
+                      <strong>{e.type==='scheduled' ? `Scheduled: Pond ${e.pond.number}` : `Harvest: Pond ${e.harvest.pond.number}`}</strong>
+                      <span>{e.datetime ? new Date(e.datetime).toLocaleString() : ''}</span>
+                    </div>
+                    <div className="pond-stats">
+                      {e.type==='scheduled' ? (
+                        <button type="button" className="secondary-btn" onClick={() => setScheduleModal({ open: true, pondId: e.pond.id, datetime: (new Date(e.pond.targetHarvestDate || openDay)).toISOString().slice(0,16) })}>Edit</button>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: 12 }}>
+                <h4>Schedule a harvest</h4>
+                <div style={{ display: 'grid', gap: 8 }}>
+                  <select id="schedule-pond-select">
+                    <option value="">Select pond</option>
+                    {(data.ponds || []).map((p:any) => <option key={p.id} value={p.id}>Pond {p.number} ({p.site?.name || ''})</option>)}
+                  </select>
+                  <input id="schedule-datetime" type="datetime-local" />
+                  <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                    <button className="secondary-btn" type="button" onClick={() => setOpenDay(null)}>Close</button>
+                    <button className="primary-btn" type="button" onClick={async () => {
+                      const sel = (document.getElementById('schedule-pond-select') as HTMLSelectElement).value;
+                      const dt = (document.getElementById('schedule-datetime') as HTMLInputElement).value;
+                      if (!sel || !dt) { setToastMessage('Choose pond and datetime'); return; }
+                      if (!token) { setToastMessage('Not authorized'); return; }
+                      const body:any = { targetHarvestDate: new Date(dt).toISOString() };
+                      const r = await fetch(`${apiBaseUrl}/ponds/${sel}`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' }, body: JSON.stringify(body) });
+                      if (r.ok) { setToastMessage('Scheduled'); await loadData(); setOpenDay(null); } else { const body = await r.text().catch(() => ''); let parsed; try { parsed = JSON.parse(body || '{}'); } catch { parsed = { error: body || r.statusText }; } setToastMessage(parsed.error || parsed.message || `Server error ${r.status}`); }
+                    }}>Schedule</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+      </Panel>
+    );
+  }
+
   return (
     <div className={`app-shell ${sidebarOpen ? 'sidebar-open' : 'sidebar-closed'}`}>
       {harvestModal.open ? (
@@ -1205,7 +1252,9 @@ function App() {
                   void deletePond(deleteConfirm.id);
                 } else if (deleteConfirm.type === 'finance') {
                   void deleteFinanceRecord(deleteConfirm.id);
-                }
+                              } else if (deleteConfirm.type === 'inventory') {
+                                void deleteInventoryItem(deleteConfirm.id);
+                              }
               }}>Confirm</button>
             </div>
           </div>
@@ -1402,7 +1451,7 @@ function App() {
                   </button>
                 )} />
               </Panel>
-              <Panel eyebrow="AI recommendation" title="Immediate action">
+              <Panel eyebrow="Recommendation" title="Immediate action">
                 <div className="insight-callout">
                   <BrainCircuit size={28} />
                   <p>Pond records now combine feeding, mortality, water quality, and harvest timing so the owner can inspect each pond without calling workers.</p>
@@ -1472,7 +1521,7 @@ function App() {
               ) : <p className="empty-copy">Workers cannot create ponds. You only see ponds assigned to you.</p>}
               <div className="pond-grid">
                 {data.ponds.map((pond) => (
-                  <button className="pond-card pond-button" key={pond.id} onClick={() => openPond(pond.id)}>
+                  <button className={`pond-card pond-button ${!isOwner ? 'compact' : ''}`} key={pond.id} onClick={() => openPond(pond.id)}>
                     <div><strong>Pond {pond.number}</strong><span>{pond.site?.name || 'Main site'} | {pond.assignedUser?.name || 'Unassigned'}</span></div>
                     <div className="pond-stats">
                       <span>{titleCase(pond.species || 'Fish')}</span>
@@ -1502,7 +1551,31 @@ function App() {
                 ))}
               </div>
             </Panel>
-            <PondSummaryPanel pond={selectedPond} summary={selectedPondSummary} isOwner={isOwner} form={pondLogForm} inventoryItems={data.inventoryItems} onFormChange={setPondLogForm} onSubmit={handleWorkerPondLogEnhanced} />
+            <PondSummaryPanel pond={selectedPond} summary={selectedPondSummary} isOwner={isOwner} form={pondLogForm} inventoryItems={data.inventoryItems} onFormChange={setPondLogForm} onSubmit={handleWorkerPondLogEnhanced} onRecordHarvest={(harvest: any) => { setLastCreatedHarvest({ id: harvest.id, pondId: harvest.pondId, numberHarvested: harvest.numberHarvested }); setToastMessage(`${harvest.numberHarvested} fish recorded — Undo`); }} />
+
+            {isOwner && selectedPond ? (
+              <Panel eyebrow="Harvest" title="Record harvest">
+                {showHarvestForm ? (
+                  <form className="owner-form" onSubmit={handleRecordHarvestSubmit}>
+                    <input placeholder="Quantity (fish)" value={harvestForm.numberHarvested} onChange={(e) => setHarvestForm({ ...harvestForm, numberHarvested: e.target.value })} required />
+                    <input placeholder="Avg weight (g)" value={harvestForm.avgWeightGrams} onChange={(e) => setHarvestForm({ ...harvestForm, avgWeightGrams: e.target.value })} />
+                    <input placeholder="Biomass (kg)" value={harvestForm.biomassKg} onChange={(e) => setHarvestForm({ ...harvestForm, biomassKg: e.target.value })} />
+                    <input placeholder="Method" value={harvestForm.method} onChange={(e) => setHarvestForm({ ...harvestForm, method: e.target.value })} />
+                    <input placeholder="Destination" value={harvestForm.destination} onChange={(e) => setHarvestForm({ ...harvestForm, destination: e.target.value })} />
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button className="primary-btn" type="submit">Record harvest</button>
+                      <button type="button" className="secondary-btn" onClick={() => setShowHarvestForm(false)}>Cancel</button>
+                    </div>
+                  </form>
+                ) : (
+                  <div>
+                    <button type="button" className="primary-btn" onClick={() => setShowHarvestForm(true)}>Record harvest</button>
+                    {lastCreatedHarvest ? <button type="button" className="secondary-btn" style={{ marginLeft: 8 }} onClick={() => undoLastHarvest()}>Undo last</button> : null}
+                  </div>
+                )}
+              </Panel>
+            ) : null}
+
           </section>
         ) : null}
 
@@ -1640,8 +1713,11 @@ function App() {
                             <strong>{item.name}</strong>
                             <span>{item.category} · {item.unit}</span>
                           </div>
-                          <span className={low ? 'warning-chip' : 'success-chip'}>{status}</span>
-                        </div>
+                                                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                                    <span className={low ? 'warning-chip' : 'success-chip'}>{status}</span>
+                                                    <button type="button" className="danger-icon" onClick={() => showDeleteConfirmation('inventory', item.id, item.name)} aria-label="Delete inventory item"><Trash2 size={14} /></button>
+                                                  </div>
+                                                </div>
                         <div className="inventory-metrics">
                           <div>
                             <span>On hand</span>
@@ -1672,8 +1748,13 @@ function App() {
           </section>
         ) : null}
 
-        {activeNav === 'logistics' && isOwner ? (
+        {activeNav === 'harvests' && isOwner ? (
           <section className="dashboard-grid wide-left">
+            <HarvestCalendar />
+          </section>
+        ) : null}
+
+        {false && isOwner ? (          <section className="dashboard-grid wide-left">
             <Panel eyebrow="Operations" title="Farm logistics overview">
               <div className="logistics-grid">
                 <div className="logistics-card highlight">
@@ -1767,46 +1848,14 @@ function App() {
           </section>
         ) : null}
 
-        {activeNav === 'ai' ? (
-          <section className="dashboard-grid wide-left">
-            <Panel eyebrow="AI assistant" title="Observation wording and guidance">
-              <textarea className="field-note" value={fieldNote} onChange={(event) => setFieldNote(event.target.value)} />
-              <div className="ai-actions">
-                <button type="button" className="primary-btn" onClick={generateAiSuggestionText} disabled={aiLoading}> {aiLoading ? 'Generating...' : 'Generate AI suggestion'} </button>
-              </div>
-              <pre className="ai-output">{aiSuggestion || buildAiSuggestion(fieldNote)}</pre>
-            </Panel>
-            <Panel eyebrow="AI history" title="Stored reports">
-              <RecordList records={data.aiReports} emptyTitle="No AI reports yet" render={(item) => <><strong>{item.title || 'AI summary'}</strong><span>{new Date(item.createdAt).toLocaleDateString()}</span></>} />
-            </Panel>
-          </section>
-        ) : null}
       </main>
 
-     {aiOpen ? (
-       <div className="floating-ai-panel">
-         <div className="floating-ai-header">
-           <div>
-             <p className="eyebrow">AI Assistant</p>
-             <strong>Field guidance</strong>
-           </div>
-           <button type="button" className="collapse-btn" onClick={() => setAiOpen(false)} aria-label="Collapse AI panel">
-             ×
-           </button>
-         </div>
-         <textarea className="field-note floating-note" value={fieldNote} onChange={(event) => setFieldNote(event.target.value)} />
-         <div className="ai-actions">
-           <button type="button" className="primary-btn" onClick={generateAiSuggestionText} disabled={aiLoading}>{aiLoading ? 'Generating...' : 'Generate'}</button>
-         </div>
-         <pre className="ai-output">{aiSuggestion || buildAiSuggestion(fieldNote)}</pre>
+     {toastMessage ? (
+       <div className="toast">
+         <span>{toastMessage}</span>
+         {recentlyDeleted ? <button type="button" className="secondary-btn" style={{ marginLeft: 12 }} onClick={() => void undoDeleteInventory()}>Undo</button> : (lastCreatedHarvest ? <button type="button" className="secondary-btn" style={{ marginLeft: 12 }} onClick={() => void undoLastHarvest()}>Undo</button> : null)}
        </div>
-     ) : (
-       <button type="button" className="floating-ai-toggle" onClick={() => setAiOpen(true)} aria-label="Open AI panel">
-         <BrainCircuit size={18} />
-         <span>AI</span>
-       </button>
-     )}
-     {toastMessage ? <div className="toast">{toastMessage}</div> : null}
+     ) : null}
     </div>
   );
 }
@@ -1867,9 +1916,34 @@ function PondSummaryPanel({
   const recommendedFeedSize = summary.recommendedFeedSize || getRecommendedFeedSize(typeof currentAvg === 'number' ? currentAvg : Number(pond.initialAvgWeightG ?? 0));
   const feedNeedsChange = currentFeedSize !== recommendedFeedSize;
 
+  const [targetDate, setTargetDate] = useState<string>(
+    pond.targetHarvestDate ? new Date(pond.targetHarvestDate).toISOString().slice(0,10) : (summary.harvest ? new Date(summary.harvest.expectedHarvestDate).toISOString().slice(0,10) : '')
+  );
+
+  async function saveTargetDate(value: string | null) {
+    if (!token || !isOwner) return setToastMessage('Not authorized');
+    const body: any = {};
+    if (value) body.targetHarvestDate = new Date(value).toISOString();
+    else body.targetHarvestDate = null;
+    try {
+      const r = await fetch(`${apiBaseUrl}/ponds/${pond.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' }, body: JSON.stringify(body) });
+      if (r.ok) {
+        setToastMessage(value ? 'Target date set' : 'Target date cleared');
+        await loadData();
+      } else {
+        const bodyText = await r.text().catch(() => '');
+        let parsed;
+        try { parsed = JSON.parse(bodyText || '{}'); } catch { parsed = { error: bodyText || r.statusText }; }
+        setToastMessage(parsed.error || parsed.message || `Server error ${r.status}`);
+      }
+    } catch (e) {
+      setToastMessage('Error updating target date');
+    }
+  }
+
   return (
     <Panel eyebrow={`Pond ${pond.number}`} title={isOwner ? 'Owner inspection view' : 'Worker pond update'}>
-      <div className="pond-detail">
+      <div className={`pond-detail ${!isOwner ? 'worker-large' : ''}`}>
         <Fish size={34} />
         <div><span>Initial stock</span><strong>{initialStock} fish</strong></div>
         <div><span>Current live</span><strong>{summary.currentLive} fish</strong></div>
@@ -1880,7 +1954,15 @@ function PondSummaryPanel({
         <div><span>Today feed</span><strong>{summary.todayFeedKg ?? 0} kg</strong></div>
         <div><span>Current avg weight</span><strong>{typeof currentAvg === 'number' ? `${currentAvg} g` : currentAvg}</strong></div>
         <div><span>Target avg weight</span><strong>{targetAvg}</strong></div>
-        <div><span>Target date</span><strong>{summary.harvest ? new Date(summary.harvest.expectedHarvestDate).toLocaleDateString() : 'Not planned'}</strong></div>
+        <div><span>Target date</span><strong>{summary.harvest ? new Date(summary.harvest.expectedHarvestDate).toLocaleDateString() : 'Not planned'}</strong>
+          {isOwner ? (
+            <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} />
+              <button type="button" className="primary-btn" onClick={() => void saveTargetDate(targetDate)}>Set</button>
+              <button type="button" className="secondary-btn" onClick={() => { setTargetDate(''); void saveTargetDate(null); }}>Clear</button>
+            </div>
+          ) : null}
+        </div>
         <div><span>Growth progress</span><strong>{growthProgress !== null ? `${growthProgress}%` : 'Missing data'}</strong></div>
         <div><span>Recommended size</span><strong>{recommendedFeedSize}</strong></div>
       </div>
@@ -1997,15 +2079,6 @@ function PondSummaryPanel({
           <input type="number" min="0" step="1" placeholder="Average weight (g)" value={form.avgWeightGrams} onChange={(event) => onFormChange({ ...form, avgWeightGrams: event.target.value })} />
           <input placeholder="Growth note" value={form.growthComment} onChange={(event) => onFormChange({ ...form, growthComment: event.target.value })} />
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-            <input type="number" min="1" step="1" placeholder="Harvest qty (fish)" value={form.harvestQuantity} onChange={(event) => onFormChange({ ...form, harvestQuantity: event.target.value })} />
-            <input placeholder="Harvest avg weight (g)" value={form.harvestAvgWeight} onChange={(event) => onFormChange({ ...form, harvestAvgWeight: event.target.value })} />
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 6 }}>
-            <input placeholder="Harvest biomass (kg)" value={form.harvestBiomassKg} onChange={(event) => onFormChange({ ...form, harvestBiomassKg: event.target.value })} />
-            <input placeholder="Harvest destination" value={form.harvestDestination} onChange={(event) => onFormChange({ ...form, harvestDestination: event.target.value })} />
-          </div>
-          <input placeholder="Harvest method" value={form.harvestMethod} onChange={(event) => onFormChange({ ...form, harvestMethod: event.target.value })} />
 
           <textarea placeholder="Water or behavior note" value={form.waterComment} onChange={(event) => onFormChange({ ...form, waterComment: event.target.value })} />
           <button className="primary-btn" type="submit"><Upload size={16} />Submit pond update</button>

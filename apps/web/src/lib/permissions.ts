@@ -12,13 +12,11 @@ export const ROLE_PERMISSIONS: Record<AppRole, string[]> = {
     'FINANCE_MANAGE',
     'INVENTORY_VIEW',
     'INVENTORY_MANAGE',
-    'AI_VIEW',
-    'AI_USE',
     'TASK_CREATE',
     'TASK_ASSIGN',
     'TASK_COMPLETE',
   ],
-  WORKER: ['POND_VIEW_ASSIGNED', 'FEEDING_CREATE', 'MORTALITY_CREATE', 'TASK_COMPLETE', 'AI_USE'],
+  WORKER: ['POND_VIEW_ASSIGNED', 'FEEDING_CREATE', 'MORTALITY_CREATE', 'TASK_COMPLETE'],
 };
 
 export function hasPermission(role: AppRole | undefined, permission: string): boolean {

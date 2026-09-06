@@ -2,7 +2,7 @@
 
 ## Product Standard
 
-AquaSphere is a role-based aquaculture operations platform for multi-farm management, pond monitoring, field tasks, inventory, finance, offline synchronization, and human-approved AI assistance.
+AquaSphere is a role-based aquaculture operations platform for multi-farm management, pond monitoring, field tasks, inventory, finance, and offline synchronization.
 
 Primary slogan: Smart Aquaculture. Smarter Decisions.
 
@@ -17,7 +17,7 @@ React PWA
   -> Backup and sync services
 ```
 
-The frontend should remain role-aware, mobile-first, and optimized for repeated field workflows. The API should keep farm records structured and auditable. AI output should always be stored as first-class records and require human review before farm actions are taken.
+The frontend should remain role-aware, mobile-first, and optimized for repeated field workflows. The API should keep farm records structured and auditable.
 
 ## Core ERD
 
@@ -46,11 +46,6 @@ erDiagram
   Task ||--o{ TaskComment : discusses
   User ||--o{ Notification : receives
 
-  AiConversation ||--o{ AiMessage : contains
-  AiConversation ||--o{ AiReport : summarizes
-  User ||--o{ AiConversation : starts
-  User ||--o{ AiReport : reviews
-  MortalityLog ||--o{ AiReport : may_trigger
 
   Pond ||--o{ Attachment : has
   FeedingLog ||--o{ Attachment : has
@@ -61,7 +56,7 @@ erDiagram
 
 ## Dashboard Roles
 
-Owner dashboard: revenue, expenses, profit, farm health score, AI summaries, alerts across all farms, worker performance, monthly trends.
+Owner dashboard: revenue, expenses, profit, farm health score, alerts across all farms, worker performance, monthly trends.
 
 Worker dashboard: today's tasks, quick records, assigned ponds, pending sync, photo upload, problem reporting.
 
@@ -69,30 +64,9 @@ Finance dashboard: expenses, income, purchases, sales, budgets, profit and loss,
 
 Inventory dashboard: stock levels, low-stock alerts, usage trends, purchase orders, supplier activity, consumption by farm and pond.
 
-AI dashboard: summaries, risk warnings, suggested actions, disease guidance, feeding recommendations, water quality interpretation.
+Insights dashboard: summaries, risk warnings, suggested actions, disease guidance, feeding recommendations, water quality interpretation.
 
 System management is handled by the Farm Owner in this version. Workers do not get management screens.
-
-## AI Provider Boundary
-
-The API should expose a provider layer instead of tying the product to one model.
-
-```text
-AiProvider
-  generateObservationSummary(input)
-  interpretWaterQuality(input)
-  draftDailyReport(input)
-  recommendActions(input)
-```
-
-Provider targets:
-
-- `local-ollama` for free/offline self-hosted inference.
-- `groq` for fast hosted inference.
-- `huggingface` for fallback hosted models.
-- `openai-compatible` for future providers using a common HTTP shape.
-
-AI must not automatically mutate farm records, delete history, make veterinary decisions, or bypass manager approval.
 
 ## Next Build Order
 
