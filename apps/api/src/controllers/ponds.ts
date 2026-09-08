@@ -273,6 +273,10 @@ export async function updatePond(req: AuthRequest, res: Response) {
 export async function deletePond(req: AuthRequest, res: Response) {
   const { id } = req.params;
 
+  if (req.userRole !== 'OWNER') {
+    return res.status(403).json({ error: 'Only the farm owner can delete pond data.' });
+  }
+
   try {
     const [feedLogs, waterLogs, mortalityLogs, harvestLogs, growthMeasurements, attachments] = await Promise.all([
       prisma.feedingLog.findMany({ where: { pondId: id }, select: { id: true } }),

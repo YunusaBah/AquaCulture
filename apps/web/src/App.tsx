@@ -34,6 +34,7 @@ type ApiState = {
   feedings: any[];
   waterLogs: any[];
   mortalityLogs: any[];
+  harvests: any[];
   inventoryItems: any[];
   tasks: any[];
   notifications: any[];
@@ -47,6 +48,7 @@ const emptyState: ApiState = {
   feedings: [],
   waterLogs: [],
   mortalityLogs: [],
+  harvests: [],
   inventoryItems: [],
   tasks: [],
   notifications: [],
@@ -60,7 +62,6 @@ const ownerNav = [
   { id: 'tasks', label: 'Tasks', icon: ClipboardList },
   { id: 'finance', label: 'Finance', icon: Wallet },
   { id: 'inventory', label: 'Inventory', icon: Package },
-  { id: 'harvests', label: 'Harvests', icon: CalendarClock },
 ];
 
 const workerNav = [
@@ -291,7 +292,10 @@ function App() {
     if (feedingsRes.ok) next.feedings = (await feedingsRes.json()).feedings || [];
     if (waterRes.ok) next.waterLogs = (await waterRes.json()).waterLogs || [];
     if (mortalityRes.ok) next.mortalityLogs = (await mortalityRes.json()).mortalityLogs || [];
-    if (harvestsRes.ok) next.feedings = next.feedings || [];
+    if (harvestsRes.ok) {
+      const body = await harvestsRes.json().catch(() => ({}));
+      next.harvests = body.harvests || [];
+    }
     if (inventoryRes.ok) next.inventoryItems = (await inventoryRes.json()).items || [];
     if (tasksRes.ok) next.tasks = (await tasksRes.json()).tasks || [];
     if (financeRes.ok) {
@@ -300,12 +304,6 @@ function App() {
       next.financeRecords = finance.records || [];
     }
     if (notificationsRes.ok) next.notifications = (await notificationsRes.json()).notifications || [];
-    // load harvests into state separately (no dedicated place, but overview totals rely on feedings/mortality)
-      if (harvestsRes.ok) {
-      const body = await harvestsRes.json().catch(() => ({}));
-      // attach harvests temporarily to data for owner inspection usage
-      (next as any).harvests = body.harvests || [];
-    }
     setData(next);
   }, [apiBaseUrl, token]);
 
@@ -834,6 +832,57 @@ function App() {
     }
   }
 
+  async function handleUpdateHarvest(harvestId: string, payload: { numberHarvested?: number; avgWeightGrams?: number | null; biomassKg?: number | null; method?: string | null; destination?: string | null }) {
+    if (!token || !isOwner) return;
+    try {
+      const response = await fetch(`${apiBaseUrl}/harvests/${harvestId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: token ? `Bearer ${token}` : '' },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        const bodyText = await response.text().catch(() => '');
+        let parsed; try { parsed = JSON.parse(bodyText || '{}'); } catch { parsed = { error: bodyText || response.statusText }; }
+        setToastMessage(parsed.error || parsed.message || `Server error ${response.status}`);
+        return;
+      }
+      setToastMessage('Harvest updated');
+      await loadData();
+      if (selectedPondId) await openPond(selectedPondId);
+    } catch (error) {
+      setToastMessage('Failed to update harvest');
+    }
+  }
+
+  async function handleApplyRecommendedFeed(pondId: string, recommendedSize: string) {
+    if (!token || !pondId) return;
+    try {
+      const response = await fetch(`${apiBaseUrl}/feedings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: token ? `Bearer ${token}` : '' },
+        body: JSON.stringify({
+          pondId,
+          quantityKg: 5,
+          feedSize: recommendedSize,
+          feedType: 'Recommended feed',
+          appetite: 5,
+          observation: `Owner applied recommended feed size ${recommendedSize}.`,
+        }),
+      });
+      if (!response.ok) {
+        const bodyText = await response.text().catch(() => '');
+        let parsed; try { parsed = JSON.parse(bodyText || '{}'); } catch { parsed = { error: bodyText || response.statusText }; }
+        setToastMessage(parsed.error || parsed.message || `Server error ${response.status}`);
+        return;
+      }
+      setToastMessage(`Recommended feed ${recommendedSize} applied`);
+      await loadData();
+      if (selectedPondId) await openPond(selectedPondId);
+    } catch (error) {
+      setToastMessage('Failed to apply recommended feed');
+    }
+  }
+
   async function undoLastHarvest() {
     if (!lastCreatedHarvest || !token || !isOwner) return;
     try {
@@ -1103,7 +1152,7 @@ function App() {
     const [openDay, setOpenDay] = useState<string | null>(null); // yyyy-mm-dd
     const [scheduleModal, setScheduleModal] = useState<{ open: boolean; pondId?: string; datetime?: string } | null>(null);
 
-    const harvests = (data as any).harvests || [];
+    const harvests = data.harvests || [];
     // build events from scheduled targetHarvestDate on ponds and actual harvest logs
     const eventsByDate: Record<string, any[]> = {};
     (data.ponds || []).forEach((p: any) => {
@@ -1551,7 +1600,22 @@ function App() {
                 ))}
               </div>
             </Panel>
-            <PondSummaryPanel pond={selectedPond} summary={selectedPondSummary} isOwner={isOwner} form={pondLogForm} inventoryItems={data.inventoryItems} onFormChange={setPondLogForm} onSubmit={handleWorkerPondLogEnhanced} onRecordHarvest={(harvest: any) => { setLastCreatedHarvest({ id: harvest.id, pondId: harvest.pondId, numberHarvested: harvest.numberHarvested }); setToastMessage(`${harvest.numberHarvested} fish recorded — Undo`); }} />
+            <PondSummaryPanel
+              pond={selectedPond}
+              summary={selectedPondSummary}
+              isOwner={isOwner}
+              form={pondLogForm}
+              inventoryItems={data.inventoryItems}
+              onFormChange={setPondLogForm}
+              onSubmit={handleWorkerPondLogEnhanced}
+              onRecordHarvest={(harvest: any) => { setLastCreatedHarvest({ id: harvest.id, pondId: harvest.pondId, numberHarvested: harvest.numberHarvested }); setToastMessage(`${harvest.numberHarvested} fish recorded — Undo`); }}
+              onApplyRecommendedFeed={handleApplyRecommendedFeed}
+              onUpdateHarvest={handleUpdateHarvest}
+              token={token}
+              apiBaseUrl={apiBaseUrl}
+              loadData={loadData}
+              setToastMessage={setToastMessage}
+            />
 
             {isOwner && selectedPond ? (
               <Panel eyebrow="Harvest" title="Record harvest">
@@ -1637,8 +1701,9 @@ function App() {
               <Metric label="Budget" value={formatDalasi(overview.finance.budget)} detail={`${formatDalasi(overview.finance.budgetRemaining)} remaining`} icon={CalendarClock} tone="navy" />
               <Metric label="Net profit/loss" value={formatDalasi(overview.finance.profit)} detail={`${overview.finance.profitMargin}% margin | ${overview.finance.status}`} icon={overview.finance.status === 'PROFIT' ? TrendingUp : TrendingDown} tone={overview.finance.status === 'PROFIT' ? 'green' : 'orange'} />
             </section>
-            <section className="dashboard-grid wide-left">
-              <Panel eyebrow="Finance ledger" title="Excel-style records">
+
+            <section className="finance-section">
+              <Panel eyebrow="Finance ledger" title="Excel-style records" className="finance-worksheet-panel">
                 <form className="finance-form" onSubmit={handleCreateFinanceRecord}>
                   <select value={financeForm.type} onChange={(event) => setFinanceForm({ ...financeForm, type: event.target.value })}><option value="EXPENSE">Expense</option><option value="INCOME">Income</option><option value="BUDGET">Budget</option></select>
                   <input placeholder="Category" value={financeForm.category} onChange={(event) => setFinanceForm({ ...financeForm, category: event.target.value })} required />
@@ -1650,13 +1715,8 @@ function App() {
                   <select value={financeForm.pondId} onChange={(event) => setFinanceForm({ ...financeForm, pondId: event.target.value })}><option value="">No pond</option>{data.ponds.map((pond) => <option key={pond.id} value={pond.id}>Pond {pond.number}</option>)}</select>
                   <button className="primary-btn" type="submit"><Plus size={16} />Add row</button>
                 </form>
+
                 <FinanceTable records={data.financeRecords} onDelete={(id) => showDeleteConfirmation('finance', id, `Finance record ${id}`)} />
-              </Panel>
-              <Panel eyebrow="Analysis" title="Finance status">
-                <div className="analysis-card">
-                  <strong>{overview.finance.status === 'PROFIT' ? 'Running on profit' : 'Running at a loss'}</strong>
-                  <p>Income is {formatDalasi(overview.finance.income)} and expenses are {formatDalasi(overview.finance.expenses)}. Net position is {formatDalasi(overview.finance.profit)}.</p>
-                </div>
               </Panel>
             </section>
           </>
@@ -1754,100 +1814,6 @@ function App() {
           </section>
         ) : null}
 
-        {false && isOwner ? (          <section className="dashboard-grid wide-left">
-            <Panel eyebrow="Operations" title="Farm logistics overview">
-              <div className="logistics-grid">
-                <div className="logistics-card highlight">
-                  <span>Feed stock coverage</span>
-                  <strong>{logistics.totalFeedStock} kg</strong>
-                  <small>{logistics.lowFeedStock} feed items need attention</small>
-                </div>
-                <div className="logistics-card">
-                  <span>7-day feed use</span>
-                  <strong>{logistics.feedUsage7d.toFixed(1)} kg</strong>
-                  <small>Across active ponds</small>
-                </div>
-                <div className="logistics-card">
-                  <span>Projected harvests</span>
-                  <strong>{logistics.upcomingHarvests.length}</strong>
-                  <small>Ponds in harvest lane</small>
-                </div>
-              </div>
-            </Panel>
-
-            <Panel eyebrow="Critical actions" title="Feed dispatch plan">
-              <div className="record-list">
-                {logistics.feedItems.length === 0 ? (
-                  <p className="empty-copy">No feed inventory has been set up yet.</p>
-                ) : (
-                  logistics.feedItems.map((item) => {
-                    const low = Number(item.currentStock || 0) <= Number(item.minStock || 0);
-                    const selectedPondId = logisticsDispatch[item.id] || data.ponds.find((pond) => pond.assignedUser?.id)?.id || data.ponds[0]?.id || '';
-                    return (
-                      <div key={item.id} className={low ? 'record-row alert-row' : 'record-row'}>
-                        <div>
-                          <strong>{item.name}</strong>
-                          <span>{item.category} · {item.currentStock ?? 0} {item.unit} on hand</span>
-                        </div>
-                        <div className="logistics-actions">
-                          <span className={low ? 'warning-chip' : 'success-chip'}>
-                            {low ? 'Restock' : 'Stable'}
-                          </span>
-                          <select value={selectedPondId} onChange={(event) => setLogisticsDispatch((current) => ({ ...current, [item.id]: event.target.value }))}>
-                            <option value="">Select pond</option>
-                            {data.ponds.map((pond) => (
-                              <option key={pond.id} value={pond.id}>Pond {pond.number}</option>
-                            ))}
-                          </select>
-                          <button
-                            type="button"
-                            className="secondary-btn mini-btn"
-                            onClick={() => void restockInventoryItem(item.id, 25, `Logistics restock for ${item.name}`)}
-                          >
-                            Restock +25
-                          </button>
-                          <button
-                            type="button"
-                            className="primary-btn mini-btn"
-                            disabled={!selectedPondId}
-                            onClick={() => void issueFeedToPond(item.id, selectedPondId, 25)}
-                          >
-                            Issue 25kg
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            </Panel>
-
-            <Panel eyebrow="Production lane" title="Harvest readiness schedule">
-              <div className="record-list">
-                {logistics.upcomingHarvests.length === 0 ? (
-                  <p className="empty-copy">No harvest timing is scheduled yet.</p>
-                ) : (
-                  logistics.upcomingHarvests.map((pond) => (
-                    <div key={pond.id} className="record-row logistics-row">
-                      <div>
-                        <strong>Pond {pond.number}</strong>
-                        <span>{pond.site} · {pond.assignedUser}</span>
-                      </div>
-                      <div className="logistics-meta">
-                        <span>{pond.targetHarvestKg > 0 ? `${pond.targetHarvestKg} kg target` : `${pond.currentLive} fish live`}</span>
-                        <span>{pond.targetDate ? new Date(pond.targetDate).toLocaleDateString() : 'Target date pending'}</span>
-                      </div>
-                      <button type="button" className="secondary-btn mini-btn" onClick={() => void createLogisticsTaskForPond({ id: pond.id, number: pond.number, assignedUserId: pond.assignedUserId, siteName: pond.site })}>
-                        Schedule check
-                      </button>
-                    </div>
-                  ))
-                )}
-              </div>
-            </Panel>
-          </section>
-        ) : null}
-
       </main>
 
      {toastMessage ? (
@@ -1868,6 +1834,13 @@ function PondSummaryPanel({
   inventoryItems,
   onFormChange,
   onSubmit,
+  onRecordHarvest,
+  onApplyRecommendedFeed,
+  onUpdateHarvest,
+  token,
+  apiBaseUrl,
+  loadData,
+  setToastMessage,
 }: {
   pond: any | null;
   summary: any | null;
@@ -1898,6 +1871,13 @@ function PondSummaryPanel({
   inventoryItems: any[];
   onFormChange: (form: any) => void;
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
+  onRecordHarvest?: (harvest: any) => void;
+  onApplyRecommendedFeed: (pondId: string, recommendedSize: string) => Promise<void> | void;
+  onUpdateHarvest: (harvestId: string, payload: { numberHarvested?: number; avgWeightGrams?: number | null; biomassKg?: number | null; method?: string | null; destination?: string | null }) => Promise<void> | void;
+  token: string | null;
+  apiBaseUrl: string;
+  loadData: () => Promise<void>;
+  setToastMessage: React.Dispatch<React.SetStateAction<string | null>>;
 }) {
   if (!pond || !summary) {
     return (
@@ -1919,6 +1899,14 @@ function PondSummaryPanel({
   const [targetDate, setTargetDate] = useState<string>(
     pond.targetHarvestDate ? new Date(pond.targetHarvestDate).toISOString().slice(0,10) : (summary.harvest ? new Date(summary.harvest.expectedHarvestDate).toISOString().slice(0,10) : '')
   );
+  const [editingHarvestId, setEditingHarvestId] = useState<string | null>(null);
+  const [harvestEditForm, setHarvestEditForm] = useState({
+    numberHarvested: '',
+    avgWeightGrams: '',
+    biomassKg: '',
+    method: '',
+    destination: '',
+  });
 
   async function saveTargetDate(value: string | null) {
     if (!token || !isOwner) return setToastMessage('Not authorized');
@@ -1985,9 +1973,9 @@ function PondSummaryPanel({
           <button
             type="button"
             className="secondary-btn compact-btn"
-            onClick={() => onFormChange({ ...form, feedSize: recommendedFeedSize })}
+            onClick={() => void onApplyRecommendedFeed(pond.id, recommendedFeedSize)}
           >
-            {feedNeedsChange ? `Use ${recommendedFeedSize}` : 'Keep this size'}
+            {feedNeedsChange ? `Apply ${recommendedFeedSize}` : 'Keep this size'}
           </button>
         </div>
       </div>
@@ -2018,9 +2006,81 @@ function PondSummaryPanel({
         {summary.harvestHistory && summary.harvestHistory.length ? (
           <div className="record-list">
             {summary.harvestHistory.map((h: any) => (
-              <div className="record-row" key={h.recordedAt}>
-                <div><strong>{new Date(h.recordedAt).toLocaleDateString()}</strong><span>{h.numberHarvested} fish</span></div>
-                <div className="pond-stats"><span>{h.avgWeightGrams ? `${h.avgWeightGrams} g` : '-'}</span><span>{h.biomassKg ? `${h.biomassKg} kg` : '-'}</span></div>
+              <div className="record-row" key={h.id || h.recordedAt}>
+                {editingHarvestId === h.id ? (
+                  <form
+                    className="owner-form"
+                    onSubmit={async (event) => {
+                      event.preventDefault();
+                      await onUpdateHarvest(h.id, {
+                        numberHarvested: harvestEditForm.numberHarvested ? Number(harvestEditForm.numberHarvested) : undefined,
+                        avgWeightGrams: harvestEditForm.avgWeightGrams ? Number(harvestEditForm.avgWeightGrams) : undefined,
+                        biomassKg: harvestEditForm.biomassKg ? Number(harvestEditForm.biomassKg) : undefined,
+                        method: harvestEditForm.method || undefined,
+                        destination: harvestEditForm.destination || undefined,
+                      });
+                      setEditingHarvestId(null);
+                    }}
+                    style={{ width: '100%' }}
+                  >
+                    <input
+                      placeholder="Quantity"
+                      value={harvestEditForm.numberHarvested}
+                      onChange={(event) => setHarvestEditForm({ ...harvestEditForm, numberHarvested: event.target.value })}
+                    />
+                    <input
+                      placeholder="Avg weight (g)"
+                      value={harvestEditForm.avgWeightGrams}
+                      onChange={(event) => setHarvestEditForm({ ...harvestEditForm, avgWeightGrams: event.target.value })}
+                    />
+                    <input
+                      placeholder="Biomass (kg)"
+                      value={harvestEditForm.biomassKg}
+                      onChange={(event) => setHarvestEditForm({ ...harvestEditForm, biomassKg: event.target.value })}
+                    />
+                    <input
+                      placeholder="Method"
+                      value={harvestEditForm.method}
+                      onChange={(event) => setHarvestEditForm({ ...harvestEditForm, method: event.target.value })}
+                    />
+                    <input
+                      placeholder="Destination"
+                      value={harvestEditForm.destination}
+                      onChange={(event) => setHarvestEditForm({ ...harvestEditForm, destination: event.target.value })}
+                    />
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button type="submit" className="primary-btn">Save</button>
+                      <button type="button" className="secondary-btn" onClick={() => setEditingHarvestId(null)}>Cancel</button>
+                    </div>
+                  </form>
+                ) : (
+                  <>
+                    <div>
+                      <strong>{new Date(h.recordedAt).toLocaleDateString()}</strong>
+                      <span>{h.numberHarvested} fish</span>
+                    </div>
+                    <div className="pond-stats">
+                      <span>{h.avgWeightGrams ? `${h.avgWeightGrams} g` : '-'}</span>
+                      <span>{h.biomassKg ? `${h.biomassKg} kg` : '-'}</span>
+                      <button
+                        type="button"
+                        className="secondary-btn compact-btn"
+                        onClick={() => {
+                          setEditingHarvestId(h.id);
+                          setHarvestEditForm({
+                            numberHarvested: String(h.numberHarvested || ''),
+                            avgWeightGrams: h.avgWeightGrams ? String(h.avgWeightGrams) : '',
+                            biomassKg: h.biomassKg ? String(h.biomassKg) : '',
+                            method: h.method || '',
+                            destination: h.destination || '',
+                          });
+                        }}
+                      >
+                        Edit
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             ))}
             <div className="stat-row"><strong>Total harvested</strong><span>{summary.totalHarvested} fish</span></div>
@@ -2125,9 +2185,9 @@ function Metric({ label, value, detail, icon: Icon, tone }: { label: string; val
   );
 }
 
-function Panel({ eyebrow, title, children }: { eyebrow: string; title: string; children: ReactNode }) {
+function Panel({ eyebrow, title, children, className }: { eyebrow: string; title: string; children: ReactNode; className?: string }) {
   return (
-    <section className="panel">
+    <section className={className ? `panel ${className}` : 'panel'}>
       <div className="panel-heading"><div><p className="eyebrow">{eyebrow}</p><h2>{title}</h2></div></div>
       {children}
     </section>

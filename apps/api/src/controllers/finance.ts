@@ -44,35 +44,40 @@ export async function getFinanceOverview(req: AuthRequest, res: Response) {
 }
 
 export async function createFinanceRecord(req: AuthRequest, res: Response) {
-  const { type, category, description, quantity, unit, unitPrice, amount, pondId, recordedAt } = req.body as {
-    type?: string;
-    category?: string;
-    description?: string;
-    quantity?: number;
-    unit?: string;
-    unitPrice?: number;
-    amount?: number;
-    pondId?: string;
-    recordedAt?: string;
-  };
+  const { type, category, description, quantity, unit, unitPrice, amount, pondId, recordedAt } = req.body as any;
 
   if (!type || !category) {
     return res.status(400).json({ error: 'type and category are required' });
   }
 
-  const resolvedAmount = amount ?? (quantity && unitPrice ? quantity * unitPrice : 0);
-  if (!resolvedAmount) {
-    return res.status(400).json({ error: 'amount or quantity and unitPrice are required' });
+  // parse numeric inputs defensively
+  const qNum = quantity !== undefined && quantity !== null && quantity !== '' ? Number(quantity) : undefined;
+  const uNum = unitPrice !== undefined && unitPrice !== null && unitPrice !== '' ? Number(unitPrice) : undefined;
+  const aNum = amount !== undefined && amount !== null && amount !== '' ? Number(amount) : undefined;
+
+  let resolvedAmount: number | undefined = undefined;
+  if (aNum !== undefined && !Number.isNaN(aNum)) {
+    resolvedAmount = aNum;
+  } else if (Number.isFinite(qNum as number) && Number.isFinite(uNum as number)) {
+    resolvedAmount = (qNum as number) * (uNum as number);
+  }
+
+  if (resolvedAmount === undefined || !Number.isFinite(resolvedAmount)) {
+    return res.status(400).json({ error: 'Provide a numeric amount, or both numeric quantity and unitPrice to calculate amount' });
+  }
+
+  if (resolvedAmount < 0) {
+    return res.status(400).json({ error: 'amount must be non-negative' });
   }
 
   const record = await prisma.financeRecord.create({
     data: {
       type: type as any,
       category,
-      description,
-      quantity,
-      unit,
-      unitPrice,
+      description: description || undefined,
+      quantity: qNum ?? null,
+      unit: unit || undefined,
+      unitPrice: uNum ?? null,
       amount: resolvedAmount,
       pondId: pondId || null,
       recordedAt: recordedAt ? new Date(recordedAt) : new Date(),
@@ -89,6 +94,11 @@ export async function createFinanceRecord(req: AuthRequest, res: Response) {
 
 export async function deleteFinanceRecord(req: AuthRequest, res: Response) {
   const { id } = req.params;
+
+  if (req.userRole !== 'OWNER') {
+    return res.status(403).json({ error: 'Only the farm owner can delete financial records.' });
+  }
+
   await prisma.financeRecord.delete({ where: { id } });
   res.status(204).send();
 }

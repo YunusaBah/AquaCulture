@@ -7,7 +7,7 @@ router.get('/', requireAuth, getPonds);
 router.post('/', requireAuth, requirePermission('POND_CREATE'), createPond);
 router.get('/:id', requireAuth, getPond);
 router.put('/:id', requireAuth, requirePermission('POND_UPDATE'), updatePond);
-router.delete('/:id', requireAuth, requirePermission('POND_ARCHIVE'), deletePond);
+router.delete('/:id', requireAuth, requirePermission('POND_ARCHIVE'), requireRole('OWNER'), deletePond);
 // photo upload
 router.post('/:id/photos', requireAuth, photoUploadMiddleware(), uploadPondPhoto);
 // QR
