@@ -1,0 +1,9 @@
+{
+  "yaml.schemas": {
+    "https://render.com/schema/render.yaml.json": [
+      "render.yaml",
+      ".render/render.yaml"
+    ]
+  },
+  "yaml.validate": true
+}

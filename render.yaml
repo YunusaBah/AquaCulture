@@ -5,7 +5,8 @@ services:
     region: oregon
     plan: starter
     buildCommand: npm ci && npm run db:generate -w @aquaculture/api && npm run build -w @aquaculture/api
-    startCommand: npm run db:migrate:deploy -w @aquaculture/api && npm run start -w @aquaculture/api
+    preDeployCommand: npm run db:migrate:deploy -w @aquaculture/api
+    startCommand: npm run start -w @aquaculture/api
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
@@ -22,8 +23,6 @@ services:
   - type: web
     name: aquaculture-web
     runtime: static
-    region: oregon
-    plan: free
     buildCommand: npm ci && npm run build -w @aquaculture/web
     staticPublishPath: apps/web/dist
     routes:
