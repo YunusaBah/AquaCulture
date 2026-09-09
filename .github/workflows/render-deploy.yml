@@ -36,7 +36,7 @@ jobs:
           curl -s -X POST "https://api.render.com/v1/services/$RENDER_SERVICE_ID_API/deploys" \
             -H "Authorization: Bearer $RENDER_API_KEY" \
             -H "Content-Type: application/json" \
-            -d '{"clearCache":true}' || true
+            -d '{"clearCache":true}'
 
       - name: Trigger Render deploy (Web)
         if: ${{ secrets.RENDER_SERVICE_ID_WEB && secrets.RENDER_API_KEY }}
@@ -48,4 +48,4 @@ jobs:
           curl -s -X POST "https://api.render.com/v1/services/$RENDER_SERVICE_ID_WEB/deploys" \
             -H "Authorization: Bearer $RENDER_API_KEY" \
             -H "Content-Type: application/json" \
-            -d '{"clearCache":true}' || true
+            -d '{"clearCache":true}'
