@@ -1,6 +1,6 @@
-# AquaSphere
+# AquaCulture
 
-AquaSphere is a mobile-first aquaculture farm management platform designed for fish farming operations, field workflows, stock monitoring, task tracking, and owner-only financial oversight.
+AquaCulture is a mobile-first aquaculture farm management platform designed for fish farming operations, field workflows, stock monitoring, task tracking, and owner-only financial oversight.
 
 ## Stack
 
@@ -41,7 +41,7 @@ this is the project design
 
 The project is intentionally structured for multi-farm readiness, worker-only field operations, owner-only finance controls, and future offline synchronization with audit-safe record handling.
 
-AquaSphere
+AquaCulture
 ```
 
 ## Slogan
@@ -120,12 +120,12 @@ Roboto Mono
 
 ---
 
-# AquaSphere Ecosystem
+# AquaCulture Ecosystem
 
 Instead of thinking about "one website," think about a complete platform.
 
 ```text
-                    AquaSphere
+                    AquaCulture
 
         ┌────────────────────────────┐
         │        Web Application      │
@@ -317,6 +317,88 @@ When Dr. Bah logs in, I imagine something like this:
 ─────────────────────────────────────
 
 Good Evening Dr. Bah
+```
+
+
+<!-- Project summary, technologies and deployment details added below -->
+
+## How it works
+
+AquaCulture is a monorepo with two apps:
+
+- apps/api — Express + TypeScript REST API with Prisma ORM talking to PostgreSQL. It provides business logic, auth (JWT + bcrypt), and all data endpoints (ponds, feedings, water quality, mortality, harvests, inventory, tasks, finance).
+- apps/web — React + Vite single-page app (TypeScript) that authenticates with the API and provides owner/worker UI. The web app stores a token in localStorage and supports an offline sync queue.
+
+Workflow summary:
+
+1. Owner creates farms, sites, and ponds via the web UI (or API). Ponds are shared (no per-worker assignment by default).
+2. Workers record feeding, water, mortality and harvest events through the web UI; these POST to the API.
+3. The API persists records in PostgreSQL via Prisma and emits notifications. A demo seed is available for local testing.
+4. The frontend supports offline queuing for field work; queued entries are flushed when the device is online.
+
+## Technologies used
+
+- Node.js (Express + TypeScript)
+- React + Vite + TypeScript for frontend
+- Prisma ORM + PostgreSQL
+- JWT for auth and bcrypt for password hashing
+- Vite for dev server and build
+- Docker-friendly: services are designed to be containerized
+
+## Deployment (Render — recommended)
+
+This project is ready to deploy on Render (recommended for student/dev usage). Render supports a managed Postgres instance and simple YAML-based service configuration. Steps:
+
+1. Sign in to https://render.com and create a new team or use your account (GitHub Student Pack credits may apply).
+2. Create a new PostgreSQL Database (Managed) on Render.
+3. In Render, create two web services:
+   - Backend: build with `npm ci && npm run build -w @aquaculture/api` and start with `npm run start -w @aquaculture/api`.
+   - Frontend (Static site): build with `npm ci && npm run build -w @aquaculture/web` and publish the `apps/web/dist` folder.
+4. Alternatively, connect this repository to Render and add the provided `.render/render.yaml` to automate creation of services.
+5. Set the following environment variables on Render for the backend service:
+   - DATABASE_URL — the Render Postgres connection string
+   - JWT_SECRET — a strong random secret
+   - CLIENT_URL — e.g., https://your-frontend-url.onrender.com
+6. Deploy and validate the site. The demo seed can be run with `npm run db:seed -w @aquaculture/api` if you prefer to seed manually.
+
+## Local development quickstart
+
+1. npm install
+2. copy .env.example to .env and configure DATABASE_URL locally
+3. npm run db:generate -w @aquaculture/api
+4. npm run db:push -w @aquaculture/api
+5. npm run db:seed -w @aquaculture/api
+6. npm run dev
+
+
+## Infrastructure-as-code (Render)
+
+A `.render/render.yaml` file is included to help Render create services and a managed Postgres instance when you connect the repo. Edit the YAML in the Render UI if you want custom plans, region, or env vars.
+
+
+## Notes about GitHub Student Pack
+
+GitHub Student Developer Pack can be used to obtain credits for Render or other hosting providers. Use those credits to provision the managed Postgres and web services. Render also integrates directly with GitHub for automatic deploys on push.
+
+
+## License
+
+(keep license details here)
+
+
+## Contact
+
+If you want automated deployment via GitHub Actions instead of connecting Render directly, use the provided GitHub Actions workflow (.github/workflows/render-deploy.yml). Add the following repository secrets in GitHub settings before pushing to main:
+
+- RENDER_API_KEY — your Render API key (personal or service key)
+- RENDER_SERVICE_ID_API — the Render service ID for the backend
+- RENDER_SERVICE_ID_WEB — the Render service ID for the frontend
+
+The workflow builds both packages and triggers a deploy for each service through the Render API.
+
+
+## Finance
+
 
 Farm Health
 
@@ -623,13 +705,13 @@ I want to design the **Entity Relationship Diagram (ERD)** first. It will show e
 
 Think of it as the blueprint of the entire system. Once the ERD is finalized, translating it into `schema.prisma` becomes straightforward, and we avoid costly redesigns later.
 
-This is the same approach many professional software teams follow because it keeps the foundation solid before implementation. I think it's the best next step for AquaSphere.
+This is the same approach many professional software teams follow because it keeps the foundation solid before implementation. I think it's the best next step for AquaCulture.
 
 ---
 
 # 10. Enterprise Dashboard Strategy
 
-To make AquaSphere feel world-class, the UI should not be one generic dashboard. It should adapt to each role and workload.
+To make AquaCulture feel world-class, the UI should not be one generic dashboard. It should adapt to each role and workload.
 
 ## Owner Dashboard
 
@@ -715,7 +797,7 @@ Focus:
 
 # 12. World-Standard Product Direction
 
-If we build AquaSphere correctly, it should feel like an enterprise platform from day one:
+If we build AquaCulture correctly, it should feel like an enterprise platform from day one:
 
 * Role-based dashboards
 * Mobile-first PWA

@@ -3,8 +3,19 @@ import { prisma } from '../lib/prisma';
 import { AuthRequest } from '../middleware/auth';
 import { createNotificationForUser } from './notifications';
 
+function workerCanAccessPond(assignedUserId: string | null | undefined, workerId?: string) {
+  return !assignedUserId || assignedUserId === workerId;
+}
+
 export async function getHarvests(req: AuthRequest, res: Response) {
-  const where = req.userRole === 'WORKER' ? { pond: { assignedUserId: req.userId } } : {};
+  const where = req.userRole === 'WORKER' ? {
+    pond: {
+      OR: [
+        { assignedUserId: req.userId },
+        { assignedUserId: null },
+      ],
+    },
+  } : {};
   const harvests = await prisma.harvestLog.findMany({
     where,
     orderBy: { recordedAt: 'desc' },

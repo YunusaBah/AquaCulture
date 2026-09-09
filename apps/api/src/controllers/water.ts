@@ -3,8 +3,19 @@ import { prisma } from '../lib/prisma';
 import { AuthRequest } from '../middleware/auth';
 import { createNotificationForUser } from './notifications';
 
+function workerCanAccessPond(assignedUserId: string | null | undefined, workerId?: string) {
+  return !assignedUserId || assignedUserId === workerId;
+}
+
 export async function getWaterQuality(req: AuthRequest, res: Response) {
-  const where = req.userRole === 'WORKER' ? { pond: { assignedUserId: req.userId } } : {};
+  const where = req.userRole === 'WORKER' ? {
+    pond: {
+      OR: [
+        { assignedUserId: req.userId },
+        { assignedUserId: null },
+      ],
+    },
+  } : {};
   const waterLogs = await prisma.waterQualityLog.findMany({
     where,
     orderBy: { measuredAt: 'desc' },
@@ -41,7 +52,7 @@ export async function createWaterQuality(req: AuthRequest, res: Response) {
 
   if (req.userRole === 'WORKER') {
     const pond = await prisma.pond.findUnique({ where: { id: pondId }, select: { assignedUserId: true } });
-    if (!pond || pond.assignedUserId !== req.userId) return res.status(403).json({ error: 'Forbidden' });
+    if (!pond || !workerCanAccessPond(pond.assignedUserId, req.userId)) return res.status(403).json({ error: 'Forbidden' });
   }
 
   const waterLog = await prisma.waterQualityLog.create({

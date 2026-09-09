@@ -23,45 +23,49 @@ const DEV_SEED_USERS = [
 async function ensureDevelopmentUsers() {
   if (process.env.NODE_ENV === 'production') return;
 
-  for (const roleName of ['OWNER', 'WORKER'] as const) {
-    await prisma.role.upsert({
-      where: { name: roleName },
-      update: {},
-      create: { name: roleName },
-    });
-  }
-
-  for (const userSeed of DEV_SEED_USERS) {
-    const existingUser = await prisma.user.findUnique({
-      where: { email: userSeed.email },
-      include: { role: true },
-    });
-
-    if (!existingUser) {
-      const hashed = await bcrypt.hash(userSeed.password, 10);
-      await prisma.user.create({
-        data: {
-          email: userSeed.email,
-          name: userSeed.name,
-          password: hashed,
-          role: { connect: { name: userSeed.role } },
-        },
-      });
-      continue;
-    }
-
-    const matchesPassword = await bcrypt.compare(userSeed.password, existingUser.password);
-    if (existingUser.role.name !== userSeed.role || !matchesPassword) {
-      const hashed = await bcrypt.hash(userSeed.password, 10);
-      await prisma.user.update({
-        where: { id: existingUser.id },
-        data: {
-          name: userSeed.name,
-          password: hashed,
-          role: { connect: { name: userSeed.role } },
-        },
+  try {
+    for (const roleName of ['OWNER', 'WORKER'] as const) {
+      await prisma.role.upsert({
+        where: { name: roleName },
+        update: {},
+        create: { name: roleName },
       });
     }
+
+    for (const userSeed of DEV_SEED_USERS) {
+      const existingUser = await prisma.user.findUnique({
+        where: { email: userSeed.email },
+        include: { role: true },
+      });
+
+      if (!existingUser) {
+        const hashed = await bcrypt.hash(userSeed.password, 10);
+        await prisma.user.create({
+          data: {
+            email: userSeed.email,
+            name: userSeed.name,
+            password: hashed,
+            role: { connect: { name: userSeed.role } },
+          },
+        });
+        continue;
+      }
+
+      const matchesPassword = await bcrypt.compare(userSeed.password, existingUser.password);
+      if (existingUser.role.name !== userSeed.role || !matchesPassword) {
+        const hashed = await bcrypt.hash(userSeed.password, 10);
+        await prisma.user.update({
+          where: { id: existingUser.id },
+          data: {
+            name: userSeed.name,
+            password: hashed,
+            role: { connect: { name: userSeed.role } },
+          },
+        });
+      }
+    }
+  } catch (error) {
+    console.warn('Development user sync is unavailable because the database is not running. Falling back to the in-memory demo account flow.', error);
   }
 }
 
@@ -80,22 +84,28 @@ export async function register(req: Request, res: Response) {
 }
 
 export async function login(req: Request, res: Response) {
-  const { email, password } = req.body;
+  const email = String(req.body?.email ?? '').trim().toLowerCase();
+  const password = String(req.body?.password ?? '');
   if (!email || !password) return res.status(400).json({ error: 'email and password required' });
 
   try {
-    // Ensure development seed users exist so tokens map to real DB users
+    // Ensure development seed users exist so tokens map to real DB users when the DB is available.
     await ensureDevelopmentUsers();
 
-    // If credentials match one of the in-memory fallback users, map to the seeded DB user
+    // If credentials match one of the in-memory fallback users, login should still work even when
+    // Postgres is stopped locally. This keeps the demo accounts usable during early development.
     const fallbackUser = getFallbackUserByCredentials(email, password);
     if (fallbackUser) {
-      const seeded = await prisma.user.findUnique({ where: { email: fallbackUser.email }, include: { role: true } });
-      if (seeded) {
-        const token = jwt.sign({ userId: seeded.id }, JWT_SECRET, { expiresIn: '7d' });
-        return res.json({ user: { id: seeded.id, email: seeded.email, name: seeded.name, role: seeded.role.name }, token });
+      try {
+        const seeded = await prisma.user.findUnique({ where: { email: fallbackUser.email }, include: { role: true } });
+        if (seeded) {
+          const token = jwt.sign({ userId: seeded.id }, JWT_SECRET, { expiresIn: '7d' });
+          return res.json({ user: { id: seeded.id, email: seeded.email, name: seeded.name, role: seeded.role.name }, token });
+        }
+      } catch (error) {
+        console.warn('Database unavailable for fallback user lookup; continuing with in-memory demo auth.', error);
       }
-      // fallback to original fallback behavior if DB user not found
+
       const token = jwt.sign({ userId: fallbackUser.id }, JWT_SECRET, { expiresIn: '7d' });
       return res.json({ user: { id: fallbackUser.id, email: fallbackUser.email, name: fallbackUser.name, role: fallbackUser.role }, token });
     }

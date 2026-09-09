@@ -197,7 +197,6 @@ function App() {
     stockedAt: '',
     initialAvgWeightG: '',
     targetHarvestKg: '',
-    assignedUserId: '',
   });
   const [financeForm, setFinanceForm] = useState({
     type: 'EXPENSE',
@@ -239,7 +238,7 @@ function App() {
   const readQueuedSyncEntries = useCallback(() => {
     if (typeof window === 'undefined') return [] as Array<Record<string, any>>;
     try {
-      return JSON.parse(localStorage.getItem('aquasphere-sync-queue') || '[]');
+      return JSON.parse(localStorage.getItem('aquaculture-sync-queue') || '[]');
     } catch {
       return [] as Array<Record<string, any>>;
     }
@@ -265,7 +264,7 @@ function App() {
       deviceId: 'browser-web',
       createdAt: new Date().toISOString(),
     };
-    localStorage.setItem('aquasphere-sync-queue', JSON.stringify([...entries, nextEntry]));
+    localStorage.setItem('aquaculture-sync-queue', JSON.stringify([...entries, nextEntry]));
     setPendingSyncCount([...entries, nextEntry].length);
   }, [readQueuedSyncEntries]);
 
@@ -341,7 +340,7 @@ function App() {
         },
       });
       if (flushResponse.ok) {
-        localStorage.removeItem('aquasphere-sync-queue');
+        localStorage.removeItem('aquaculture-sync-queue');
         setPendingSyncCount(0);
         await loadData();
       }
@@ -349,7 +348,7 @@ function App() {
   }, [apiBaseUrl, loadData, readQueuedSyncEntries, token]);
 
   useEffect(() => {
-    loadData().catch((err) => console.error('Failed to load AquaSphere data', err));
+    loadData().catch((err) => console.error('Failed to load AquaCulture data', err));
   }, [loadData]);
 
   useEffect(() => {
@@ -670,7 +669,6 @@ function App() {
   async function handleCreatePond(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!token || !isOwner) return;
-    const assignedUserId = newPond.assignedUserId || workers[0]?.id || undefined;
     if (!navigator.onLine) {
       queueOfflineSyncEntry('pond_create', {
         siteName: newPond.siteName,
@@ -681,7 +679,6 @@ function App() {
         stockedAt: newPond.stockedAt,
         initialAvgWeightG: newPond.initialAvgWeightG,
         targetHarvestKg: newPond.targetHarvestKg,
-        assignedUserId,
       }, 'pond');
       return;
     }
@@ -706,11 +703,10 @@ function App() {
         stockedAt: newPond.stockedAt || undefined,
         initialAvgWeightG: Number(newPond.initialAvgWeightG) || undefined,
         targetHarvestKg: Number(newPond.targetHarvestKg) || undefined,
-        assignedUserId,
       }),
     });
     if (pondRes.ok) {
-      setNewPond({ siteName: '', number: '', species: 'CATFISH', capacity: '', initialPopulation: '', stockedAt: '', initialAvgWeightG: '', targetHarvestKg: '', assignedUserId: '' });
+      setNewPond({ siteName: '', number: '', species: 'CATFISH', capacity: '', initialPopulation: '', stockedAt: '', initialAvgWeightG: '', targetHarvestKg: '' });
       await loadData();
     }
   }
@@ -1127,7 +1123,7 @@ function App() {
             <span className="brand-mark">AS</span>
             <div>
               <p className="eyebrow">Smart Aquaculture. Smarter Decisions.</p>
-              <h1>AquaSphere</h1>
+              <h1>AquaCulture</h1>
             </div>
           </div>
           <p className="auth-copy">Owner management and worker field operations with permanent farm records.</p>
@@ -1366,7 +1362,7 @@ function App() {
           <span className="brand-mark">AS</span>
           <div>
             <p className="eyebrow">{isOwner ? 'Owner Control' : 'Field Work'}</p>
-            <h2>AquaSphere</h2>
+            <h2>AquaCulture</h2>
           </div>
         </div>
         <nav className="nav-list" aria-label="Primary">
@@ -1557,10 +1553,6 @@ function App() {
                     <option value="CATFISH">Catfish</option><option value="TILAPIA">Tilapia</option><option value="TROUT">Trout</option><option value="SHRIMP">Shrimp</option><option value="OTHER">Other</option>
                   </select>
                   <input placeholder="Capacity" value={newPond.capacity} onChange={(event) => setNewPond({ ...newPond, capacity: event.target.value })} required />
-                  <select value={newPond.assignedUserId} onChange={(event) => setNewPond({ ...newPond, assignedUserId: event.target.value })}>
-                    <option value="">Assign worker (optional)</option>
-                    {workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name || worker.email}</option>)}
-                  </select>
                   <input placeholder="Initial fish" value={newPond.initialPopulation} onChange={(event) => setNewPond({ ...newPond, initialPopulation: event.target.value })} />
                   <input type="date" value={newPond.stockedAt} onChange={(event) => setNewPond({ ...newPond, stockedAt: event.target.value })} />
                   <input placeholder="Initial avg g" value={newPond.initialAvgWeightG} onChange={(event) => setNewPond({ ...newPond, initialAvgWeightG: event.target.value })} />

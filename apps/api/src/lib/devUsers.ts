@@ -16,7 +16,10 @@ export const FALLBACK_DEVELOPMENT_USERS = [
 ];
 
 export function getFallbackUserByCredentials(email: string, password: string) {
-  return FALLBACK_DEVELOPMENT_USERS.find((user) => user.email === email && user.password === password);
+  const normalizedEmail = email.trim().toLowerCase();
+  return FALLBACK_DEVELOPMENT_USERS.find(
+    (user) => user.email.toLowerCase() === normalizedEmail && user.password === password,
+  );
 }
 
 export function getFallbackUserById(userId: string) {

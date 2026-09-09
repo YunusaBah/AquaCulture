@@ -1,8 +1,8 @@
-# AquaSphere Architecture Blueprint
+# AquaCulture Architecture Blueprint
 
 ## Product Standard
 
-AquaSphere is a role-based aquaculture operations platform for multi-farm management, pond monitoring, field tasks, inventory, finance, and offline synchronization.
+AquaCulture is a role-based aquaculture operations platform for multi-farm management, pond monitoring, field tasks, inventory, finance, and offline synchronization.
 
 Primary slogan: Smart Aquaculture. Smarter Decisions.
 

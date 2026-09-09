@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: aquaculture-api
+    env: node
+    # Render will run this build command to prepare the service
+    buildCommand: npm ci && npm run build -w @aquaculture/api
+    startCommand: npm run start -w @aquaculture/api
+    plan: starter
+
+  - type: static
+    name: aquaculture-web
+    env: static
+    buildCommand: npm ci && npm run build -w @aquaculture/web
+    staticPublishPath: apps/web/dist
+    plan: free
+
+databases:
+  - name: aquaculture-db
+    plan: starter
+    type: postgresql

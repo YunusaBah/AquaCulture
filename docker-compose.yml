@@ -1,0 +1,40 @@
+version: "3.8"
+
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: aquaculture
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@db:5432/aquaculture
+      JWT_SECRET: change-me-dev
+      PORT: 4000
+      CLIENT_URL: http://localhost:3000
+    ports:
+      - "4000:4000"
+    command: sh -c "npm run db:push -w @aquaculture/api && npm run db:seed -w @aquaculture/api || true; npm run start -w @aquaculture/api"
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    depends_on:
+      - api
+    ports:
+      - "3000:80"
+
+volumes:
+  db-data:

@@ -65,13 +65,13 @@ async function main() {
   const farm = await prisma.farm.upsert({
     where: { id: 'demo-farm-aquaculture' },
     update: {
-      name: 'AquaSphere Demonstration Farm',
+    name: 'AquaCulture Demonstration Farm',
       ownerId: owner.id,
       members: { set: [{ id: owner.id }, { id: worker.id }] },
     },
     create: {
       id: 'demo-farm-aquaculture',
-      name: 'AquaSphere Demonstration Farm',
+      name: 'AquaCulture Demonstration Farm',
       ownerId: owner.id,
       members: { connect: [{ id: owner.id }, { id: worker.id }] },
     },

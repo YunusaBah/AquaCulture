@@ -188,17 +188,20 @@ export async function getPond(req: AuthRequest, res: Response) {
   res.json({ pond: { ...pond, feedLogs, mortalityLogs, harvestLogs, growthMeasurements }, summary });
 }
 
+function workerCanAccessPond(assignedUserId: string | null | undefined, workerId?: string) {
+  return !assignedUserId || assignedUserId === workerId;
+}
+
 export async function createPond(req: AuthRequest, res: Response) {
   if (req.userRole === 'WORKER') {
     return res.status(403).json({ error: 'Workers cannot create ponds' });
   }
-  const { siteId, number, species, capacity, currentVolume, assignedUserId, status, createdAt, initialPopulation, stockedAt, initialAvgWeightG, targetHarvestKg, expectedGrowthGDay } = req.body as {
+  const { siteId, number, species, capacity, currentVolume, status, createdAt, initialPopulation, stockedAt, initialAvgWeightG, targetHarvestKg, expectedGrowthGDay } = req.body as {
     siteId?: string;
     number?: number;
     species?: string;
     capacity?: number;
     currentVolume?: number;
-    assignedUserId?: string;
     status?: string;
     createdAt?: string;
     initialPopulation?: number;
@@ -225,7 +228,7 @@ export async function createPond(req: AuthRequest, res: Response) {
       initialAvgWeightG: initialAvgWeightG ?? null,
       targetHarvestKg: targetHarvestKg ?? null,
       expectedGrowthGDay: expectedGrowthGDay ?? null,
-      assignedUserId: assignedUserId || null,
+      assignedUserId: null,
       status: (status as any) || 'ACTIVE',
       createdAt: createdAt ? new Date(createdAt) : undefined,
     },
@@ -334,7 +337,7 @@ export async function uploadPondPhoto(req: AuthRequest, res: Response) {
   const { id } = req.params;
   if (req.userRole === 'WORKER') {
     const pond = await prisma.pond.findUnique({ where: { id }, select: { assignedUserId: true } });
-    if (!pond || pond.assignedUserId !== req.userId) return res.status(403).json({ error: 'Forbidden' });
+    if (!pond || !workerCanAccessPond(pond.assignedUserId, req.userId)) return res.status(403).json({ error: 'Forbidden' });
   }
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const file = req.file;
@@ -353,7 +356,7 @@ export async function getPondQr(req: AuthRequest, res: Response) {
   const { id } = req.params;
   const pond = await prisma.pond.findUnique({ where: { id } });
   if (!pond) return res.status(404).send('Not found');
-  if (req.userRole === 'WORKER' && pond.assignedUserId !== req.userId) {
+  if (req.userRole === 'WORKER' && !workerCanAccessPond(pond.assignedUserId, req.userId)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   if (pond.qrCode) {
