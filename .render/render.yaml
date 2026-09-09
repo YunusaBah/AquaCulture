@@ -3,7 +3,7 @@ services:
     name: aquaculture-api
     runtime: node
     region: oregon
-    plan: starter
+    plan: free
     buildCommand: npm ci && npm run db:generate -w @aquaculture/api && npm run build -w @aquaculture/api
     preDeployCommand: npm run db:migrate:deploy -w @aquaculture/api
     startCommand: npm run start -w @aquaculture/api
@@ -35,4 +35,4 @@ services:
 
 databases:
   - name: aquaculture-db
-    plan: starter
+    plan: free
