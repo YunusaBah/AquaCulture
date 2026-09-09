@@ -36,4 +36,3 @@ services:
 databases:
   - name: aquaculture-db
     plan: starter
-    type: postgresql
