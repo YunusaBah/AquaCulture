@@ -347,19 +347,25 @@ Workflow summary:
 
 ## Deployment (Render — recommended)
 
-This project is ready to deploy on Render (recommended for student/dev usage). Render supports a managed Postgres instance and simple YAML-based service configuration. Steps:
+This project is ready to deploy on Render using the included Blueprint at `.render/render.yaml`. It provisions:
+- `aquaculture-db` (managed PostgreSQL)
+- `aquaculture-api` (Node web service)
+- `aquaculture-web` (static site)
+
+Deploy steps:
 
 1. Sign in to https://render.com and create a new team or use your account (GitHub Student Pack credits may apply).
 2. Create a new PostgreSQL Database (Managed) on Render.
-3. In Render, create two web services:
-   - Backend: build with `npm ci && npm run build -w @aquaculture/api` and start with `npm run start -w @aquaculture/api`.
-   - Frontend (Static site): build with `npm ci && npm run build -w @aquaculture/web` and publish the `apps/web/dist` folder.
-4. Alternatively, connect this repository to Render and add the provided `.render/render.yaml` to automate creation of services.
-5. Set the following environment variables on Render for the backend service:
-   - DATABASE_URL — the Render Postgres connection string
-   - JWT_SECRET — a strong random secret
-   - CLIENT_URL — e.g., https://your-frontend-url.onrender.com
-6. Deploy and validate the site. The demo seed can be run with `npm run db:seed -w @aquaculture/api` if you prefer to seed manually.
+3. Create a new Blueprint service in Render and point it to this repository (`.render/render.yaml`).
+4. Render will build/start with:
+   - API build: `npm ci && npm run db:generate -w @aquaculture/api && npm run build -w @aquaculture/api`
+   - API start: `npm run db:migrate:deploy -w @aquaculture/api && npm run start -w @aquaculture/api`
+   - Web build: `npm ci && npm run build -w @aquaculture/web`
+   - Web publish dir: `apps/web/dist`
+5. Confirm/set environment variables:
+   - API: `DATABASE_URL` (from Render DB), `JWT_SECRET`, `CLIENT_URL`
+   - Web: `VITE_API_URL` (example: `https://aquaculture-api.onrender.com/api`)
+6. Deploy and validate the site. Optional seed step: `npm run db:seed -w @aquaculture/api`.
 
 ## Local development quickstart
 
@@ -388,7 +394,7 @@ GitHub Student Developer Pack can be used to obtain credits for Render or other 
 
 ## Contact
 
-If you want automated deployment via GitHub Actions instead of connecting Render directly, use the provided GitHub Actions workflow (.github/workflows/render-deploy.yml). Add the following repository secrets in GitHub settings before pushing to main:
+If you want automated deployment via GitHub Actions instead of connecting Render directly, use `.github/workflows/render-deploy.yml`. Add the following repository secrets in GitHub settings before pushing to main:
 
 - RENDER_API_KEY — your Render API key (personal or service key)
 - RENDER_SERVICE_ID_API — the Render service ID for the backend
