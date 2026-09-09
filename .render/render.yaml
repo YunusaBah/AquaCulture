@@ -18,7 +18,7 @@ services:
       - key: CLIENT_URL
         sync: false
 
-  - type: static
+  - type: web
     name: aquaculture-web
     env: static
     buildCommand: npm ci && npm run build -w @aquaculture/web
