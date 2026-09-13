@@ -60,6 +60,19 @@ async function main() {
     await prisma.role.upsert({ where: { name: role }, update: {}, create: { name: role } });
   }
 
+  // Create registration code for OWNER only
+  const registrationCodes = [
+    { code: process.env.SEED_OWNER_CODE || 'OWNER2024', role: 'OWNER' as const },
+  ];
+
+  for (const regCode of registrationCodes) {
+    await prisma.registrationCode.upsert({
+      where: { code: regCode.code },
+      update: {},
+      create: { ...regCode, isUsed: false },
+    });
+  }
+
   const [owner, worker] = await Promise.all(seedUsers.map(upsertUser));
 
   const farm = await prisma.farm.upsert({

@@ -1,4 +1,20 @@
+import path from 'path';
+import fs from 'fs';
+import dotenv from 'dotenv';
 import { PrismaClient } from '@prisma/client';
+
+const candidateEnvFiles = [
+  path.resolve(process.cwd(), '.env'),
+  path.resolve(process.cwd(), '..', '.env'),
+  path.resolve(process.cwd(), '..', '..', '.env'),
+];
+
+for (const envPath of candidateEnvFiles) {
+  if (fs.existsSync(envPath)) {
+    dotenv.config({ path: envPath });
+    break;
+  }
+}
 
 declare global {
   // allow global prisma in dev to avoid multiple clients

@@ -1,5 +1,19 @@
+import path from 'path';
+import fs from 'fs';
 import dotenv from 'dotenv';
-dotenv.config();
+
+const candidateEnvFiles = [
+  path.resolve(process.cwd(), '.env'),
+  path.resolve(process.cwd(), '..', '.env'),
+  path.resolve(process.cwd(), '..', '..', '.env'),
+];
+
+for (const envPath of candidateEnvFiles) {
+  if (fs.existsSync(envPath)) {
+    dotenv.config({ path: envPath });
+    break;
+  }
+}
 
 export const PORT = process.env.PORT ? Number(process.env.PORT) : 4000;
 export const JWT_SECRET = process.env.JWT_SECRET || 'change-me';

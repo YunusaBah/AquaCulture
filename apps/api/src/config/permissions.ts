@@ -1,6 +1,5 @@
-export const ROLE_NAMES = ['OWNER', 'WORKER'] as const;
+﻿export const ROLE_NAMES = ['OWNER', 'WORKER'] as const;
 export type RoleName = (typeof ROLE_NAMES)[number];
-
 export const ROLE_PERMISSIONS: Record<RoleName, string[]> = {
   OWNER: [
     'FARM_VIEW',
@@ -67,14 +66,12 @@ export const ROLE_PERMISSIONS: Record<RoleName, string[]> = {
     'ATTACHMENT_CREATE',
   ],
 };
-
 export function normalizeRole(role?: string): RoleName | null {
   if (role === 'OWNER' || role === 'WORKER') {
     return role;
   }
   return null;
 }
-
 export function hasPermissionForRole(role: string | undefined, permission: string): boolean {
   const normalizedRole = normalizeRole(role);
   if (!normalizedRole) {

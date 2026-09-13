@@ -17,9 +17,12 @@ import {
   TrendingDown,
   TrendingUp,
   Upload,
+  UserCog,
+  Users,
   Wallet,
 } from 'lucide-react';
 import { hasPermission } from './lib/permissions';
+import { AuthShell } from './components/AuthShell';
 
 type CurrentUser = {
   id: string;
@@ -57,9 +60,10 @@ const emptyState: ApiState = {
 };
 
 const ownerNav = [
-  { id: 'command', label: 'Owner Dashboard', icon: Activity },
+  { id: 'command', label: 'Admin Dashboard', icon: Activity },
   { id: 'ponds', label: 'Ponds', icon: Fish },
   { id: 'tasks', label: 'Tasks', icon: ClipboardList },
+  { id: 'workers', label: 'Workers', icon: Users },
   { id: 'finance', label: 'Finance', icon: Wallet },
   { id: 'inventory', label: 'Inventory', icon: Package },
 ];
@@ -70,12 +74,41 @@ const workerNav = [
   { id: 'tasks', label: 'Tasks', icon: ClipboardList },
 ];
 
+const viewerNav = [
+  { id: 'command', label: 'Dashboard', icon: Activity },
+  { id: 'ponds', label: 'Pond Reports', icon: Fish },
+  { id: 'finance', label: 'Finance Reports', icon: Wallet },
+];
+
 function formatDalasi(value: number) {
   return `D${Math.round(value || 0).toLocaleString()}`;
 }
 
 function titleCase(value: string) {
   return value.toLowerCase().split('_').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
+}
+
+const financeTypeLabels: Record<string, string> = {
+  INCOME: 'Sales',
+  EXPENSE: 'Running Cost',
+  BUDGET: 'Fixed Cost',
+};
+
+const financeUnitOptions = ['kg', 'bags', 'batches', 'weekly', 'monthly', 'litres', 'tons', 'units', 'boxes', 'items'];
+const inventoryUnitByCategory: Record<string, string> = {
+  FEED: 'kg',
+  MEDICINE: 'bottles',
+  CHEMICAL: 'litres',
+  EQUIPMENT: 'units',
+  SUPPLIES: 'bags',
+};
+
+function formatFinanceType(value: string) {
+  return financeTypeLabels[value] || titleCase(value);
+}
+
+function getInventoryUnitForCategory(category: string) {
+  return inventoryUnitByCategory[category] || 'units';
 }
 
 function getRecommendedFeedSize(avgWeightGrams?: number | null) {
@@ -98,9 +131,16 @@ function App() {
     const stored = localStorage.getItem('aquaculture-user');
     return stored ? JSON.parse(stored) : null;
   });
-  const [email, setEmail] = useState('owner@aquaculture.localapp');
-  const [password, setPassword] = useState('Owner7614091');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [showRegisterForm, setShowRegisterForm] = useState(false);
+  const [registerName, setRegisterName] = useState('');
+  const [registerEmail, setRegisterEmail] = useState('');
+  const [registerPassword, setRegisterPassword] = useState('');
+  const [registerConfirmPassword, setRegisterConfirmPassword] = useState('');
+  const [registerCode, setRegisterCode] = useState('');
+  const [workerForm, setWorkerForm] = useState({ fullName: '', email: '', password: '' });
   const [activeNav, setActiveNav] = useState('command');
   const [sidebarOpen, setSidebarOpen] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth > 1120));
   const [loading, setLoading] = useState(false);
@@ -115,6 +155,13 @@ function App() {
   const [isOnline, setIsOnline] = useState<boolean>(() => (typeof navigator === 'undefined' ? true : navigator.onLine));
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [workerRoster, setWorkerRoster] = useState<any[]>([]);
+  const [workerAccessModal, setWorkerAccessModal] = useState<{ open: boolean; worker?: any; action?: 'block' | 'unblock' } | null>(null);
+  const [workerSearchTerm, setWorkerSearchTerm] = useState('');
+  const [workerStatusFilter, setWorkerStatusFilter] = useState<'all' | 'active' | 'blocked'>('all');
+  const [showWorkerCreateModal, setShowWorkerCreateModal] = useState(false);
+  const [expandedWorkerId, setExpandedWorkerId] = useState<string | null>(null);
+  const [workerPasswords, setWorkerPasswords] = useState<Record<string, string>>({});
 
   // Owner harvest recording UI state
   const [showHarvestForm, setShowHarvestForm] = useState(false);
@@ -149,6 +196,14 @@ function App() {
   const resetPondLogForm = () => {
     setPondLogForm({ ...defaultPondLogForm });
   };
+
+  const buildWorkerEmailFromName = useCallback((fullName: string) => {
+    const clean = fullName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+    if (!clean) return '';
+    return `${clean}@gmail.com`;
+  }, []);
+
+  const isStrongPassword = useCallback((value: string) => /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/.test(value.trim()), []);
 
   const getRecommendedFeedSize = useCallback((avgWeightGrams?: number | null) => {
     if (!avgWeightGrams || avgWeightGrams <= 0) return '4mm';
@@ -191,23 +246,24 @@ function App() {
   const [newPond, setNewPond] = useState({
     siteName: '',
     number: '',
-    species: 'CATFISH',
+    species: 'TILAPIA',
     capacity: '',
     initialPopulation: '',
     stockedAt: '',
     initialAvgWeightG: '',
     targetHarvestKg: '',
   });
+  const [showPondCreateModal, setShowPondCreateModal] = useState(false);
   const [financeForm, setFinanceForm] = useState({
     type: 'EXPENSE',
     category: '',
-    description: '',
     quantity: '',
-    unit: '',
+    unit: 'kg',
     unitPrice: '',
     amount: '',
     pondId: '',
   });
+  const [showFinanceForm, setShowFinanceForm] = useState(false);
   const [taskForm, setTaskForm] = useState({
     title: '',
     description: '',
@@ -216,13 +272,15 @@ function App() {
     dueAt: '',
   });
   const [inventoryForm, setInventoryForm] = useState({
-    name: '',
     category: '',
-    unit: '',
+    unit: 'kg',
     currentStock: '',
     minStock: '',
-    sku: '',
+    feedSize: '4mm',
   });
+  const [showInventoryForm, setShowInventoryForm] = useState(false);
+  const [restockItemId, setRestockItemId] = useState<string | null>(null);
+  const [restockQuantity, setRestockQuantity] = useState('');
   const [inventoryAdjustment, setInventoryAdjustment] = useState({
     itemId: '',
     type: 'ADD',
@@ -306,6 +364,27 @@ function App() {
     setData(next);
   }, [apiBaseUrl, token]);
 
+  const loadWorkerRoster = useCallback(async () => {
+    if (!token || !isOwner) {
+      setWorkerRoster([]);
+      return;
+    }
+
+    try {
+      const response = await fetch(`${apiBaseUrl}/auth/workers`, {
+        headers: { Authorization: token ? 'Bearer ' + token : '' },
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        console.warn('Failed to load worker roster', body.error || response.statusText);
+        return;
+      }
+      setWorkerRoster(body.workers || []);
+    } catch (error) {
+      console.warn('Worker roster unavailable', error);
+    }
+  }, [apiBaseUrl, isOwner, token]);
+
   const flushOfflineSyncQueue = useCallback(async () => {
     if (!token || !navigator.onLine) return;
     const entries = readQueuedSyncEntries();
@@ -350,6 +429,14 @@ function App() {
   useEffect(() => {
     loadData().catch((err) => console.error('Failed to load AquaCulture data', err));
   }, [loadData]);
+
+  useEffect(() => {
+    if (token && isOwner) {
+      void loadWorkerRoster();
+    } else {
+      setWorkerRoster([]);
+    }
+  }, [isOwner, loadWorkerRoster, token]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -560,13 +647,40 @@ function App() {
   }
 
   const workers = useMemo(() => {
+    const rosterWorkers = Array.isArray(workerRoster) ? workerRoster : [];
     const members = data.farms.flatMap((farm) => farm.members || []);
     const farmWorkers = members.filter((member) => member.role?.name === 'WORKER');
-    if (farmWorkers.length > 0) return farmWorkers;
-    return [
-      { id: 'worker-dev', email: 'worker@aquaculture.localapp', name: 'Field Worker', role: { name: 'WORKER' } },
+    const merged = [...rosterWorkers, ...farmWorkers];
+    const uniqueByKey = new Map<string, any>();
+
+    merged.forEach((worker) => {
+      const key = String(worker.id || worker.email || '').toLowerCase();
+      if (!key) return;
+      const candidate = uniqueByKey.get(key);
+      if (!candidate || (candidate.createdAt ?? 0) < (worker.createdAt ?? 0)) {
+        uniqueByKey.set(key, worker);
+      }
+    });
+
+    const deduped = Array.from(uniqueByKey.values()).map((worker) => ({
+      ...worker,
+      password: worker.password || workerPasswords[worker.id || worker.email] || 'Assigned password',
+    }));
+    return deduped.length > 0 ? deduped : [
+      { id: 'worker-dev', email: 'worker@aquaculture.localapp', name: 'Field Worker', role: { name: 'WORKER' }, blocked: false, createdAt: new Date().toISOString(), password: 'Assigned password' },
     ];
-  }, [data.farms]);
+  }, [data.farms, workerPasswords, workerRoster]);
+
+  const filteredWorkers = useMemo(() => {
+    const term = workerSearchTerm.trim().toLowerCase();
+    return workers.filter((worker) => {
+      const matchesText = !term || [worker.name, worker.email].filter(Boolean).some((value) => String(value).toLowerCase().includes(term));
+      const matchesStatus = workerStatusFilter === 'all'
+        || (workerStatusFilter === 'active' && !worker.blocked)
+        || (workerStatusFilter === 'blocked' && Boolean(worker.blocked));
+      return matchesText && matchesStatus;
+    });
+  }, [workerSearchTerm, workerStatusFilter, workers]);
 
   const selectedTask = useMemo(() => {
     if (!data.tasks.length) return null;
@@ -625,6 +739,50 @@ function App() {
     }
   }
 
+  async function handleOwnerRegister(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLoading(true);
+    setError('');
+
+    if (!registerName.trim() || !registerEmail.trim() || !registerPassword.trim() || !registerCode.trim()) {
+      setError('Name, email, password, and admin code are required.');
+      setLoading(false);
+      return;
+    }
+    if (registerPassword !== registerConfirmPassword) {
+      setError('Passwords do not match.');
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const response = await fetch(`${apiBaseUrl}/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: registerName.trim(),
+          email: registerEmail.trim().toLowerCase(),
+          password: registerPassword,
+          code: registerCode.trim().toUpperCase(),
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || !body.token) {
+        throw new Error(body.error || 'Admin registration failed');
+      }
+      localStorage.setItem('aquaculture-token', body.token);
+      localStorage.setItem('aquaculture-user', JSON.stringify(body.user));
+      setToken(body.token);
+      setCurrentUser(body.user);
+      setShowRegisterForm(false);
+      setActiveNav('command');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Admin registration failed');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function openPond(pondId: string) {
     if (!token) return;
     setSelectedPondId(pondId);
@@ -669,26 +827,69 @@ function App() {
   async function handleCreatePond(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!token || !isOwner) return;
-    if (!navigator.onLine) {
-      queueOfflineSyncEntry('pond_create', {
-        siteName: newPond.siteName,
-        number: newPond.number,
-        species: newPond.species,
-        capacity: newPond.capacity,
-        initialPopulation: newPond.initialPopulation,
-        stockedAt: newPond.stockedAt,
-        initialAvgWeightG: newPond.initialAvgWeightG,
-        targetHarvestKg: newPond.targetHarvestKg,
-      }, 'pond');
+
+    const siteName = newPond.siteName.trim();
+    const pondNumber = Number(newPond.number);
+    const capacity = Number(newPond.capacity);
+    const initialPopulation = Number(newPond.initialPopulation) || undefined;
+
+    if (!siteName) {
+      setToastMessage('Site name is required.');
       return;
     }
+    if (!Number.isInteger(pondNumber) || pondNumber <= 0) {
+      setToastMessage('Pond number must be a positive whole number.');
+      return;
+    }
+    if (!Number.isFinite(capacity) || capacity <= 0) {
+      setToastMessage('Capacity must be greater than zero.');
+      return;
+    }
+
+    const siteKey = siteName.toLowerCase();
+    if (data.ponds.some((pond) => String(pond.site?.name || '').trim().toLowerCase() === siteKey && Number(pond.number) === pondNumber)) {
+      setToastMessage('A pond with this number already exists in that site.');
+      return;
+    }
+
+    if (!navigator.onLine) {
+      queueOfflineSyncEntry('pond_create', {
+        siteName,
+        number: pondNumber,
+        species: newPond.species,
+        capacity,
+        initialPopulation,
+        stockedAt: newPond.stockedAt || undefined,
+        initialAvgWeightG: Number(newPond.initialAvgWeightG) || undefined,
+        targetHarvestKg: Number(newPond.targetHarvestKg) || undefined,
+      }, 'pond');
+      setNewPond({ siteName: '', number: '', species: 'TILAPIA', capacity: '', initialPopulation: '', stockedAt: '', initialAvgWeightG: '', targetHarvestKg: '' });
+      setShowPondCreateModal(false);
+      setToastMessage('Pond queued for sync while offline.');
+      return;
+    }
+
     const headers = { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' };
     const allSites = data.farms.flatMap((farm) => farm.sites || []);
-    let site = allSites.find((item) => item.name?.toLowerCase() === newPond.siteName.toLowerCase());
+    let site = allSites.find((item) => String(item.name || '').trim().toLowerCase() === siteKey);
     if (!site) {
-      const siteRes = await fetch(`${apiBaseUrl}/sites`, { method: 'POST', headers, body: JSON.stringify({ name: newPond.siteName }) });
-      if (!siteRes.ok) return;
-      site = (await siteRes.json()).site;
+      const siteRes = await fetch(`${apiBaseUrl}/sites`, { method: 'POST', headers, body: JSON.stringify({ name: siteName }) });
+      const siteBody = await siteRes.json().catch(() => ({}));
+      if (!siteRes.ok) {
+        const farmRes = await fetch(`${apiBaseUrl}/farms`, { method: 'POST', headers, body: JSON.stringify({ name: siteName }) });
+        const farmBody = await farmRes.json().catch(() => ({}));
+        if (!farmRes.ok) {
+          setToastMessage(siteBody.error || farmBody.error || 'Unable to create the site for this pond.');
+          return;
+        }
+        site = farmBody.farm?.sites?.[0] || null;
+        if (!site) {
+          setToastMessage('Unable to create the site for this pond.');
+          return;
+        }
+      } else {
+        site = siteBody.site;
+      }
     }
 
     const pondRes = await fetch(`${apiBaseUrl}/ponds`, {
@@ -696,24 +897,31 @@ function App() {
       headers,
       body: JSON.stringify({
         siteId: site.id,
-        number: Number(newPond.number),
+        number: pondNumber,
         species: newPond.species,
-        capacity: Number(newPond.capacity),
-        initialPopulation: Number(newPond.initialPopulation) || undefined,
+        capacity,
+        initialPopulation,
         stockedAt: newPond.stockedAt || undefined,
         initialAvgWeightG: Number(newPond.initialAvgWeightG) || undefined,
         targetHarvestKg: Number(newPond.targetHarvestKg) || undefined,
       }),
     });
-    if (pondRes.ok) {
-      setNewPond({ siteName: '', number: '', species: 'CATFISH', capacity: '', initialPopulation: '', stockedAt: '', initialAvgWeightG: '', targetHarvestKg: '' });
-      await loadData();
+    const pondBody = await pondRes.json().catch(() => ({}));
+    if (!pondRes.ok) {
+      setToastMessage(pondBody.error || 'Unable to create pond.');
+      return;
     }
+
+    setNewPond({ siteName: '', number: '', species: 'TILAPIA', capacity: '', initialPopulation: '', stockedAt: '', initialAvgWeightG: '', targetHarvestKg: '' });
+    setShowPondCreateModal(false);
+    setToastMessage(`Pond ${pondNumber} created successfully.`);
+    await loadData();
   }
 
   const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; type: 'pond' | 'finance' | 'inventory' | null; id?: string; label?: string }>({ open: false, type: null });
   const [taskComment, setTaskComment] = useState('');
   const [recentlyDeleted, setRecentlyDeleted] = useState<{ item: any; timeoutId?: number } | null>(null);
+  const [pendingFinanceDelete, setPendingFinanceDelete] = useState<{ item: any; timeoutId?: number } | null>(null);
 
   function showDeleteConfirmation(type: 'pond' | 'finance' | 'inventory', id: string, label: string) {
     setDeleteConfirm({ open: true, type, id, label });
@@ -742,9 +950,76 @@ function App() {
 
   async function deleteFinanceRecord(id: string) {
     if (!token || !isOwner) return;
-    const response = await fetch(`${apiBaseUrl}/finance/${id}`, { method: 'DELETE', headers: { Authorization: token ? 'Bearer ' + token : '' } });
-    if (response.ok) await loadData();
+    const item = data.financeRecords.find((record) => record.id === id);
+    if (!item) {
+      cancelDeleteConfirmation();
+      return;
+    }
+
+    if (pendingFinanceDelete && pendingFinanceDelete.item?.id === id) {
+      cancelDeleteConfirmation();
+      return;
+    }
+
+    const deleteResponse = await fetch(`${apiBaseUrl}/finance/${id}`, {
+      method: 'DELETE',
+      headers: { Authorization: token ? 'Bearer ' + token : '' },
+    });
+
+    if (!deleteResponse.ok) {
+      const bodyText = await deleteResponse.text().catch(() => '');
+      let parsed; try { parsed = JSON.parse(bodyText || '{}'); } catch { parsed = { error: bodyText || deleteResponse.statusText }; }
+      setToastMessage(parsed.error || parsed.message || `Server error ${deleteResponse.status}`);
+      cancelDeleteConfirmation();
+      setTimeout(() => setToastMessage(null), 2200);
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setPendingFinanceDelete(null);
+      setToastMessage(null);
+    }, 15000);
+
+    setPendingFinanceDelete({ item, timeoutId });
+    setToastMessage('Row removed');
+    await loadData();
     cancelDeleteConfirmation();
+  }
+
+  async function undoFinanceDelete() {
+    if (!pendingFinanceDelete || !token || !isOwner) return;
+    const item = pendingFinanceDelete.item;
+    if (pendingFinanceDelete.timeoutId) window.clearTimeout(pendingFinanceDelete.timeoutId);
+
+    const restoreBody = {
+      type: item.type,
+      category: item.category,
+      description: item.description,
+      quantity: Number(item.quantity) || undefined,
+      unit: item.unit,
+      unitPrice: Number(item.unitPrice) || undefined,
+      amount: Number(item.amount) || undefined,
+      pondId: item.pondId || undefined,
+      recordedAt: item.recordedAt || new Date().toISOString(),
+    };
+
+    const restoreResponse = await fetch(`${apiBaseUrl}/finance`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' },
+      body: JSON.stringify(restoreBody),
+    });
+
+    if (restoreResponse.ok) {
+      setToastMessage('Row restored');
+      await loadData();
+    } else {
+      const bodyText = await restoreResponse.text().catch(() => '');
+      let parsed; try { parsed = JSON.parse(bodyText || '{}'); } catch { parsed = { error: bodyText || restoreResponse.statusText }; }
+      setToastMessage(parsed.error || parsed.message || `Server error ${restoreResponse.status}`);
+    }
+
+    setPendingFinanceDelete(null);
+    setTimeout(() => setToastMessage(null), 2200);
   }
 
   async function deleteInventoryItem(id: string) {
@@ -783,7 +1058,6 @@ function App() {
       unit: item.unit,
       currentStock: item.currentStock || 0,
       minStock: item.minStock || 0,
-      sku: item.sku || undefined,
     };
     const response = await fetch(`${apiBaseUrl}/inventory`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' }, body: JSON.stringify(body) });
     if (response.ok) {
@@ -899,49 +1173,84 @@ function App() {
   async function handleCreateFinanceRecord(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!token || !isOwner) return;
-    if (!navigator.onLine) {
-      queueOfflineSyncEntry('finance_record_create', {
-        ...financeForm,
-        quantity: Number(financeForm.quantity) || undefined,
-        unitPrice: Number(financeForm.unitPrice) || undefined,
-        amount: Number(financeForm.amount) || undefined,
-      }, 'finance_record');
+
+    const quantity = Number(financeForm.quantity);
+    const unitPrice = Number(financeForm.unitPrice);
+    const amount = Number(financeForm.amount) || (Number.isFinite(quantity) && Number.isFinite(unitPrice) ? quantity * unitPrice : 0);
+
+    if (!financeForm.category.trim()) {
+      setToastMessage('Category is required');
       return;
     }
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      setToastMessage('Quantity must be greater than zero');
+      return;
+    }
+    if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+      setToastMessage('Unit price must be valid');
+      return;
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setToastMessage('Amount must be greater than zero');
+      return;
+    }
+
+    const payload = {
+      type: financeForm.type,
+      category: financeForm.category.trim(),
+      quantity,
+      unit: financeForm.unit || 'kg',
+      unitPrice,
+      amount,
+      pondId: financeForm.pondId || undefined,
+      recordedAt: new Date().toISOString(),
+    };
+
+    if (!navigator.onLine) {
+      queueOfflineSyncEntry('finance_record_create', payload, 'finance_record');
+      setFinanceForm({ type: 'EXPENSE', category: '', quantity: '', unit: 'kg', unitPrice: '', amount: '', pondId: '' });
+      setShowFinanceForm(false);
+      return;
+    }
+
     const response = await fetch(`${apiBaseUrl}/finance`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' },
-      body: JSON.stringify({
-        ...financeForm,
-        quantity: Number(financeForm.quantity) || undefined,
-        unitPrice: Number(financeForm.unitPrice) || undefined,
-        amount: Number(financeForm.amount) || undefined,
-        pondId: financeForm.pondId || undefined,
-      }),
+      body: JSON.stringify(payload),
     });
     if (response.ok) {
-      setFinanceForm({ type: 'EXPENSE', category: '', description: '', quantity: '', unit: '', unitPrice: '', amount: '', pondId: '' });
+      setFinanceForm({ type: 'EXPENSE', category: '', quantity: '', unit: 'kg', unitPrice: '', amount: '', pondId: '' });
+      setShowFinanceForm(false);
       await loadData();
+    } else {
+      const bodyText = await response.text().catch(() => '');
+      let parsed; try { parsed = JSON.parse(bodyText || '{}'); } catch { parsed = { error: bodyText || response.statusText }; }
+      setToastMessage(parsed.error || parsed.message || `Server error ${response.status}`);
     }
   }
 
   async function handleCreateInventoryItem(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!token || !isOwner) return;
+    const category = inventoryForm.category;
+    const generatedName = category === 'FEED'
+      ? `Feed ${inventoryForm.feedSize || '4mm'}`
+      : titleCase(category.toLowerCase());
+
     const response = await fetch(`${apiBaseUrl}/inventory`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' },
       body: JSON.stringify({
-        name: inventoryForm.name,
-        category: inventoryForm.category,
+        name: generatedName,
+        category,
         unit: inventoryForm.unit,
-        sku: inventoryForm.sku || undefined,
         currentStock: Number(inventoryForm.currentStock) || 0,
         minStock: Number(inventoryForm.minStock) || 0,
       }),
     });
     if (response.ok) {
-      setInventoryForm({ name: '', category: '', unit: '', currentStock: '', minStock: '', sku: '' });
+      setInventoryForm({ category: '', unit: 'kg', currentStock: '', minStock: '', feedSize: '4mm' });
+      setShowInventoryForm(false);
       await loadData();
     }
   }
@@ -972,6 +1281,32 @@ function App() {
     }
   }
 
+  async function handleInventoryRestock(itemId: string, quantityInput: string) {
+    if (!token || !isOwner || !itemId) return;
+    const quantity = Number(quantityInput);
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      setToastMessage('Enter a valid positive quantity');
+      return;
+    }
+
+    const response = await fetch(`${apiBaseUrl}/inventory/adjust`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' },
+      body: JSON.stringify({ itemId, change: quantity, reason: 'Restock' }),
+    });
+
+    if (response.ok) {
+      setRestockItemId(null);
+      setRestockQuantity('');
+      setToastMessage('Stock restocked');
+      await loadData();
+    } else {
+      const bodyText = await response.text().catch(() => '');
+      let parsed; try { parsed = JSON.parse(bodyText || '{}'); } catch { parsed = { error: bodyText || response.statusText }; }
+      setToastMessage(parsed.error || parsed.message || `Server error ${response.status}`);
+    }
+  }
+
   async function addTaskComment(taskId: string) {
     if (!token || !taskId) return;
     if (!taskComment || taskComment.trim().length === 0) {
@@ -994,6 +1329,86 @@ function App() {
       setToastMessage('Failed to add comment');
     }
     setTimeout(() => setToastMessage(null), 3000);
+  }
+
+  async function handleCreateWorker(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!token || !isOwner) return;
+
+    const fullName = workerForm.fullName.trim();
+    const email = workerForm.email.trim().toLowerCase();
+    const password = workerForm.password.trim();
+
+    if (!fullName || !email || !password) {
+      setToastMessage('Worker full name, email, and password are required');
+      return;
+    }
+
+    if (!isStrongPassword(password)) {
+      setToastMessage('Password must be at least 8 characters with uppercase, lowercase, and numbers.');
+      return;
+    }
+
+    const emailTaken = workers.some((worker) => String(worker.email || '').trim().toLowerCase() === email);
+    if (emailTaken) {
+      setToastMessage('This email is already taken.');
+      return;
+    }
+
+    const response = await fetch(`${apiBaseUrl}/auth/create-worker`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' },
+      body: JSON.stringify({ name: fullName, email, password }),
+    });
+
+    const body = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      setToastMessage(body.error || 'Worker account creation failed');
+      return;
+    }
+
+    setWorkerForm({ fullName: '', email: '', password: '' });
+    setShowWorkerCreateModal(false);
+    setWorkerPasswords((current) => ({ ...current, [body.user?.id || email]: password }));
+    setToastMessage(`Worker account created for ${email}`);
+    await loadData();
+    await loadWorkerRoster();
+  }
+
+  async function copyWorkerDetail(value: string, label: string) {
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setToastMessage(`${label} copied`);
+    } catch (error) {
+      setToastMessage(`Unable to copy ${label.toLowerCase()}`);
+    }
+  }
+
+  function getWorkerCredentialsText(worker: any) {
+    const password = worker.password || workerPasswords[worker.id || worker.email] || 'Assigned password';
+    return `${worker.email}\n${password}`;
+  }
+
+  async function handleWorkerAccessToggle(workerId: string, shouldBlock: boolean) {
+    if (!token || !isOwner || !workerId) return;
+
+    const response = await fetch(`${apiBaseUrl}/auth/workers/${workerId}/access`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' },
+      body: JSON.stringify({ blocked: shouldBlock }),
+    });
+
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setToastMessage(body.error || 'Unable to update worker access');
+      return;
+    }
+
+    setWorkerAccessModal(null);
+    setToastMessage(shouldBlock ? 'Worker blocked — access revoked' : 'Worker unblocked — access restored');
+    await loadWorkerRoster();
   }
 
   async function handleCreateTask(event: React.FormEvent<HTMLFormElement>) {
@@ -1126,17 +1541,37 @@ function App() {
               <h1>AquaCulture</h1>
             </div>
           </div>
-          <p className="auth-copy">Owner management and worker field operations with permanent farm records.</p>
-          <div className="login-grid">
-            <button type="button" onClick={() => { setEmail('owner@aquaculture.localapp'); setPassword('Owner7614091'); }}>Farm Owner</button>
-            <button type="button" onClick={() => { setEmail('worker@aquaculture.localapp'); setPassword('Worker5221'); }}>Farm Worker</button>
-          </div>
-          <form className="auth-form" onSubmit={handleLogin}>
-            <label>Email<input value={email} type="email" onChange={(event) => setEmail(event.target.value)} /></label>
-            <label>Password<input value={password} type="password" onChange={(event) => setPassword(event.target.value)} /></label>
-            {error ? <p className="form-error">{error}</p> : null}
-            <button className="primary-btn" type="submit" disabled={loading}>{loading ? 'Signing in...' : 'Sign in'}</button>
-          </form>
+
+          {showRegisterForm ? (
+            <>
+              <div className="auth-register-banner">
+                <span>Admin code required for registration</span>
+              </div>
+              <form className="auth-form" onSubmit={handleOwnerRegister}>
+                <h2>Create admin account</h2>
+                  <label>Full name<input value={registerName} type="text" onChange={(event) => setRegisterName(event.target.value)} required /></label>
+                  <label>Email<input value={registerEmail} type="email" onChange={(event) => setRegisterEmail(event.target.value)} required /></label>
+                  <label>Password<input value={registerPassword} type="password" onChange={(event) => setRegisterPassword(event.target.value)} required /></label>
+                  <label>Confirm password<input value={registerConfirmPassword} type="password" onChange={(event) => setRegisterConfirmPassword(event.target.value)} required /></label>
+                  <label>Admin code<input value={registerCode} type="text" onChange={(event) => setRegisterCode(event.target.value.toUpperCase())} placeholder="ADMIN2024" required /></label>
+                  {error ? <p className="form-error">{error}</p> : null}
+                  <button className="primary-btn" type="submit" disabled={loading}>{loading ? 'Creating account...' : 'Register admin'}</button>
+                  <p className="auth-footer-link">
+                    <button type="button" className="text-link" onClick={() => { setShowRegisterForm(false); setError(''); }}>Back to login</button>
+                  </p>
+                </form>
+            </>
+          ) : (
+            <form className="auth-form" onSubmit={handleLogin}>
+                <label>Email<input value={email} type="email" onChange={(event) => setEmail(event.target.value)} /></label>
+                <label>Password<input value={password} type="password" onChange={(event) => setPassword(event.target.value)} /></label>
+                {error ? <p className="form-error">{error}</p> : null}
+                <button className="primary-btn" type="submit" disabled={loading}>{loading ? 'Signing in...' : 'Sign in'}</button>
+                <p className="auth-footer-link">
+                  <button type="button" className="text-link" onClick={() => { setShowRegisterForm(true); setError(''); }}>Register as admin</button>
+                </p>
+            </form>
+          )}
         </section>
       </main>
     );
@@ -1288,7 +1723,6 @@ function App() {
           <div className="modal modal-sm">
             <h3>Confirm delete</h3>
             <p>Are you sure you want to delete <strong>{deleteConfirm.label}</strong>?</p>
-            <p className="modal-note">This action cannot be undone.</p>
             <div className="modal-actions">
               <button type="button" className="secondary-btn" onClick={cancelDeleteConfirmation}>No</button>
               <button type="button" className="primary-btn danger-btn" onClick={() => {
@@ -1348,6 +1782,24 @@ function App() {
                 </div>
               </div>
             ) : null}
+      {workerAccessModal?.open && workerAccessModal.worker ? (
+        <div className="modal-backdrop">
+          <div className="modal modal-sm">
+            <h3>{workerAccessModal.action === 'block' ? 'Block worker access' : 'Unblock worker access'}</h3>
+            <p>
+              {workerAccessModal.action === 'block'
+                ? `Block ${workerAccessModal.worker.name || workerAccessModal.worker.email}? They will lose access until you unblock them.`
+                : `Restore access for ${workerAccessModal.worker.name || workerAccessModal.worker.email}?`}
+            </p>
+            <div className="modal-actions">
+              <button type="button" className="secondary-btn" onClick={() => setWorkerAccessModal(null)}>Cancel</button>
+              <button type="button" className="primary-btn" onClick={() => void handleWorkerAccessToggle(workerAccessModal.worker.id, workerAccessModal.action === 'block')}>
+                {workerAccessModal.action === 'block' ? 'Block access' : 'Unblock'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <button
         type="button"
         className="mobile-menu-btn"
@@ -1358,24 +1810,25 @@ function App() {
       </button>
 
       <aside className={sidebarOpen ? 'sidebar open' : 'sidebar'}>
-        <div className="brand-lockup">
-          <span className="brand-mark">AS</span>
-          <div>
-            <p className="eyebrow">{isOwner ? 'Owner Control' : 'Field Work'}</p>
-            <h2>AquaCulture</h2>
-          </div>
+      <div className="brand-lockup">
+        <span className="brand-mark">AS</span>
+        <div>
+          <p className="eyebrow">{isOwner ? 'Admin control' : 'Field work'}</p>
+          <h2>AquaCulture</h2>
         </div>
-        <nav className="nav-list" aria-label="Primary">
-          {navItems.map(({ id, label, icon: Icon }) => (
-            <button key={id} className={activeNav === id ? 'nav-item active' : 'nav-item'} onClick={() => { setActiveNav(id); if (window.innerWidth <= 1120) setSidebarOpen(false); }}>
-              <Icon size={18} />{label}
-            </button>
-          ))}
-        </nav>
-        <div className="sync-card">
+      </div>
+      <nav className="nav-list" aria-label="Primary">
+        {navItems.map(({ id, label, icon: Icon }) => (
+          <button key={id} className={activeNav === id ? 'nav-item active' : 'nav-item'} onClick={() => { setActiveNav(id); if (window.innerWidth <= 1120) setSidebarOpen(false); }}>
+            <Icon size={18} />{label}
+          </button>
+        ))}
+      </nav>
+
+      <div className="sync-card">
           <CheckCircle2 size={19} />
           <div>
-            <strong>{isOwner ? 'Owner permissions' : 'Worker permissions'}</strong>
+            <strong>{isOwner ? 'Admin permissions' : 'Worker permissions'}</strong>
             <span>{isOwner ? 'Can create ponds, finance records, and tasks' : 'Assigned ponds only. No pond creation.'}</span>
           </div>
         </div>
@@ -1455,7 +1908,17 @@ function App() {
                 </div>
               ) : null}
             </div>
-            <button className="secondary-btn" onClick={() => { localStorage.removeItem('aquaculture-token'); localStorage.removeItem('aquaculture-user'); setToken(null); setCurrentUser(null); }}>Log out</button>
+            <button className="secondary-btn" onClick={() => {
+              localStorage.removeItem('aquaculture-token');
+              localStorage.removeItem('aquaculture-user');
+              localStorage.removeItem('aquaculture-sync-queue');
+              setToken(null);
+              setCurrentUser(null);
+              setEmail('');
+              setPassword('');
+              setError('');
+              setShowRegisterForm(false);
+            }}>Log out</button>
           </div>
         </header>
 
@@ -1471,8 +1934,9 @@ function App() {
                 <Metric label="My ponds" value={String(data.ponds.length)} detail="Assigned to you" icon={Fish} tone="navy" />
               )}
             </section>
+
             <section className="dashboard-grid">
-              <Panel eyebrow={isOwner ? 'Owner oversight' : 'Today'} title={isOwner ? 'Pond activity status' : "Today's checklist"}>
+              <Panel eyebrow={isOwner ? 'Admin oversight' : 'Today'} title={isOwner ? 'Pond activity status' : "Today's checklist"}>
                 <RecordList records={isOwner ? data.ponds.slice(0, 6) : data.tasks.slice(0, 6)} emptyTitle={isOwner ? 'No ponds yet' : 'No tasks assigned'} render={(record) => isOwner ? (
                   <><strong>Pond {record.number}</strong><span>{record.assignedUser?.name || 'Unassigned'} | {titleCase(record.status || 'ACTIVE')}</span></>
                 ) : (
@@ -1544,21 +2008,78 @@ function App() {
 
         {activeNav === 'ponds' ? (
           <section className="dashboard-grid wide-left">
-            <Panel eyebrow={isOwner ? 'Owner pond management' : 'Assigned ponds'} title="Pond registry">
+            <Panel eyebrow={isOwner ? 'Admin pond management' : 'Assigned ponds'} title="Pond registry">
               {isOwner ? (
-                <form className="compact-form pond-form-grid" onSubmit={handleCreatePond}>
-                  <input placeholder="Site name" value={newPond.siteName} onChange={(event) => setNewPond({ ...newPond, siteName: event.target.value })} required />
-                  <input placeholder="Pond no." value={newPond.number} onChange={(event) => setNewPond({ ...newPond, number: event.target.value })} required />
-                  <select value={newPond.species} onChange={(event) => setNewPond({ ...newPond, species: event.target.value })}>
-                    <option value="CATFISH">Catfish</option><option value="TILAPIA">Tilapia</option><option value="TROUT">Trout</option><option value="SHRIMP">Shrimp</option><option value="OTHER">Other</option>
-                  </select>
-                  <input placeholder="Capacity" value={newPond.capacity} onChange={(event) => setNewPond({ ...newPond, capacity: event.target.value })} required />
-                  <input placeholder="Initial fish" value={newPond.initialPopulation} onChange={(event) => setNewPond({ ...newPond, initialPopulation: event.target.value })} />
-                  <input type="date" value={newPond.stockedAt} onChange={(event) => setNewPond({ ...newPond, stockedAt: event.target.value })} />
-                  <input placeholder="Initial avg g" value={newPond.initialAvgWeightG} onChange={(event) => setNewPond({ ...newPond, initialAvgWeightG: event.target.value })} />
-                  <input placeholder="Target kg" value={newPond.targetHarvestKg} onChange={(event) => setNewPond({ ...newPond, targetHarvestKg: event.target.value })} />
-                  <button className="primary-btn" type="submit"><Plus size={16} />Create pond</button>
-                </form>
+                <>
+                  <div className="worker-toolbar" style={{ marginBottom: 16 }}>
+                    <button type="button" className="primary-btn" onClick={() => setShowPondCreateModal(true)}>
+                      <Plus size={16} />Add pond
+                    </button>
+                  </div>
+
+                  {showPondCreateModal ? (
+                    <div className="modal-backdrop" onClick={() => setShowPondCreateModal(false)}>
+                      <div className="modal worker-modal" onClick={(event) => event.stopPropagation()}>
+                        <h3>New pond profile</h3>
+                        <form className="worker-create-form" onSubmit={handleCreatePond}>
+                          <label className="worker-field">
+                            <span>Site name</span>
+                            <input value={newPond.siteName} onChange={(event) => setNewPond({ ...newPond, siteName: event.target.value })} placeholder="North Lagoon" required />
+                          </label>
+
+                          <label className="worker-field">
+                            <span>Pond number</span>
+                            <input value={newPond.number} onChange={(event) => setNewPond({ ...newPond, number: event.target.value })} placeholder="1" required />
+                          </label>
+
+                          <label className="worker-field">
+                            <span>Species</span>
+                            <select value={newPond.species} onChange={(event) => setNewPond({ ...newPond, species: event.target.value })}>
+                              <option value="TILAPIA">Tilapia</option>
+                              <option value="CATFISH">Catfish</option>
+                              <option value="TROUT">Trout</option>
+                              <option value="SHRIMP">Shrimp</option>
+                              <option value="OTHER">Other</option>
+                            </select>
+                          </label>
+
+                          <label className="worker-field">
+                            <span>Capacity (m³)</span>
+                            <input value={newPond.capacity} onChange={(event) => setNewPond({ ...newPond, capacity: event.target.value })} placeholder="500" required />
+                          </label>
+
+                          <label className="worker-field">
+                            <span>Initial fish</span>
+                            <input value={newPond.initialPopulation} onChange={(event) => setNewPond({ ...newPond, initialPopulation: event.target.value })} placeholder="400" />
+                          </label>
+
+                          <label className="worker-field">
+                            <span>Stocked on</span>
+                            <input type="date" value={newPond.stockedAt} onChange={(event) => setNewPond({ ...newPond, stockedAt: event.target.value })} />
+                          </label>
+
+                          <label className="worker-field">
+                            <span>Initial avg weight (g)</span>
+                            <input value={newPond.initialAvgWeightG} onChange={(event) => setNewPond({ ...newPond, initialAvgWeightG: event.target.value })} placeholder="0.01" />
+                          </label>
+
+                          <label className="worker-field">
+                            <span>Target harvest (kg)</span>
+                            <input value={newPond.targetHarvestKg} onChange={(event) => setNewPond({ ...newPond, targetHarvestKg: event.target.value })} placeholder="200" />
+                          </label>
+
+                          <div className="worker-form-footer">
+                            <small className="helper-text">Create a pond and it will appear in the registry immediately.</small>
+                            <div className="modal-actions compact-actions">
+                              <button type="button" className="secondary-btn" onClick={() => setShowPondCreateModal(false)}>Cancel</button>
+                              <button className="primary-btn" type="submit">Create pond</button>
+                            </div>
+                          </div>
+                        </form>
+                      </div>
+                    </div>
+                  ) : null}
+                </>
               ) : <p className="empty-copy">Workers cannot create ponds. You only see ponds assigned to you.</p>}
               <div className="pond-grid">
                 {data.ponds.map((pond) => (
@@ -1638,7 +2159,7 @@ function App() {
         {activeNav === 'tasks' ? (
           <section className="dashboard-grid wide-left">
             {isOwner ? (
-              <Panel eyebrow="Owner task dispatch" title="Create and send worker task">
+              <Panel eyebrow="Admin task dispatch" title="Create and send worker task">
                 <form className="owner-form" onSubmit={handleCreateTask}>
                   <input placeholder="Task title" value={taskForm.title} onChange={(event) => setTaskForm({ ...taskForm, title: event.target.value })} required />
                   <textarea placeholder="Task details" value={taskForm.description} onChange={(event) => setTaskForm({ ...taskForm, description: event.target.value })} />
@@ -1685,28 +2206,245 @@ function App() {
           </section>
         ) : null}
 
+        {activeNav === 'workers' && isOwner ? (
+          <section className="dashboard-grid wide-left">
+            <Panel eyebrow="Staff directory" title="Worker access control">
+              <div className="worker-toolbar">
+                <button type="button" className="primary-btn" onClick={() => setShowWorkerCreateModal(true)}>
+                  <Plus size={16} />Add worker
+                </button>
+                <div className="worker-search-wrap">
+                  <input
+                    value={workerSearchTerm}
+                    onChange={(event) => setWorkerSearchTerm(event.target.value)}
+                    placeholder="Search worker name or email"
+                    aria-label="Search workers"
+                  />
+                </div>
+                <div className="worker-filter-row">
+                  <button
+                    type="button"
+                    className={workerStatusFilter === 'all' ? 'filter-pill active' : 'filter-pill'}
+                    onClick={() => setWorkerStatusFilter('all')}
+                  >
+                    All
+                  </button>
+                  <button
+                    type="button"
+                    className={workerStatusFilter === 'active' ? 'filter-pill active' : 'filter-pill'}
+                    onClick={() => setWorkerStatusFilter('active')}
+                  >
+                    Active
+                  </button>
+                  <button
+                    type="button"
+                    className={workerStatusFilter === 'blocked' ? 'filter-pill active' : 'filter-pill'}
+                    onClick={() => setWorkerStatusFilter('blocked')}
+                  >
+                    Blocked
+                  </button>
+                </div>
+              </div>
+
+              {showWorkerCreateModal ? (
+                <div className="modal-backdrop" onClick={() => setShowWorkerCreateModal(false)}>
+                  <div className="modal worker-modal" onClick={(event) => event.stopPropagation()}>
+                    <h3>New worker profile</h3>
+                    <form className="worker-create-form" onSubmit={handleCreateWorker}>
+                      <label className="worker-field">
+                        <span>Full name</span>
+                        <input
+                          value={workerForm.fullName}
+                          onChange={(event) => {
+                            const next = event.target.value;
+                            const suggested = buildWorkerEmailFromName(next);
+                            setWorkerForm((current) => ({
+                              ...current,
+                              fullName: next,
+                              email: !current.email || current.email === buildWorkerEmailFromName(current.fullName) ? suggested : current.email,
+                            }));
+                          }}
+                          placeholder="John Smith"
+                          required
+                        />
+                      </label>
+
+                      <label className="worker-field">
+                        <span>Email</span>
+                        <input
+                          type="email"
+                          value={workerForm.email}
+                          onChange={(event) => setWorkerForm((current) => ({ ...current, email: event.target.value }))}
+                          placeholder="johnsmith@gmail.com"
+                          required
+                        />
+                      </label>
+
+                      <label className="worker-field">
+                        <span>Password</span>
+                        <input
+                          type="password"
+                          value={workerForm.password}
+                          onChange={(event) => setWorkerForm((current) => ({ ...current, password: event.target.value }))}
+                          placeholder="Create a strong password"
+                          required
+                        />
+                      </label>
+
+                      <div className="worker-form-footer">
+                        <small className="helper-text">Suggested email: {buildWorkerEmailFromName(workerForm.fullName) || 'Enter full name first'}</small>
+                        <small className="helper-text strong-note">Password must include 8+ characters, uppercase, lowercase, and numbers.</small>
+                        <div className="modal-actions compact-actions">
+                          <button type="button" className="secondary-btn" onClick={() => setShowWorkerCreateModal(false)}>Cancel</button>
+                          <button className="primary-btn" type="submit">Create worker</button>
+                        </div>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="record-list worker-card-list">
+                {filteredWorkers.length === 0 ? (
+                  <div className="empty-employee-card">
+                    <p className="empty-copy">No workers match this search or status.</p>
+                  </div>
+                ) : (
+                  filteredWorkers.map((worker) => {
+                    const isExpanded = expandedWorkerId === worker.id;
+                    return (
+                      <div
+                        key={worker.id}
+                        className={worker.blocked ? 'worker-card blocked' : 'worker-card'}
+                        onClick={() => setExpandedWorkerId((current) => current === worker.id ? null : worker.id)}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            setExpandedWorkerId((current) => current === worker.id ? null : worker.id);
+                          }
+                        }}
+                      >
+                        <div className="worker-card-top">
+                          <div className="worker-avatar">{(worker.name || worker.email || 'W').charAt(0).toUpperCase()}</div>
+                          <div className="worker-card-head">
+                            <strong>{worker.name || worker.email}</strong>
+                          </div>
+                          <span className={worker.blocked ? 'status-chip blocked' : 'status-chip active'}>
+                            {worker.blocked ? 'Blocked' : 'Active'}
+                          </span>
+                        </div>
+
+                        {isExpanded ? (
+                          <>
+                            <div className="worker-meta-grid compact-meta-grid">
+                              <div>
+                                <small>Email</small>
+                                <span>{worker.email}</span>
+                              </div>
+                              <div>
+                                <small>Password</small>
+                                <span>{worker.password || workerPasswords[worker.id || worker.email] || 'Assigned password'}</span>
+                              </div>
+                              <div>
+                                <small>Created</small>
+                                <span>{worker.createdAt ? new Date(worker.createdAt).toLocaleString() : 'Recent'}</span>
+                              </div>
+                              <div>
+                                <small>Access</small>
+                                <span>{worker.blocked ? 'Revoked' : 'Granted'}</span>
+                              </div>
+                            </div>
+
+                            <div className="worker-card-actions">
+                              <button type="button" className="secondary-btn compact-btn" onClick={(event) => {
+                                event.stopPropagation();
+                                void copyWorkerDetail(getWorkerCredentialsText(worker), 'Credentials');
+                              }}>
+                                Copy
+                              </button>
+                              <button
+                                type="button"
+                                className={worker.blocked ? 'secondary-btn compact-btn' : 'primary-btn compact-btn'}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setWorkerAccessModal({ open: true, worker, action: worker.blocked ? 'unblock' : 'block' });
+                                }}
+                              >
+                                {worker.blocked ? 'Unblock' : 'Block'}
+                              </button>
+                            </div>
+                          </>
+                        ) : null}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </Panel>
+            <Panel eyebrow="Access rules" title="Staff management">
+              <div className="analysis-card">
+                <p>Blocked workers cannot sign in with their email and password until the admin restores access.</p>
+                <ul className="bullet-list">
+                  <li>Workers are created with their assigned email and password.</li>
+                  <li>Each worker record shows their creation date and current status.</li>
+                  <li>Only the admin can block or unblock a worker profile.</li>
+                </ul>
+              </div>
+            </Panel>
+          </section>
+        ) : null}
+
         {activeNav === 'finance' && isOwner ? (
           <>
             <section className="metrics-grid">
-              <Metric label="Income" value={formatDalasi(overview.finance.income)} detail="All income records" icon={Wallet} tone="blue" />
-              <Metric label="Expenses" value={formatDalasi(overview.finance.expenses)} detail={`${overview.finance.budgetUsedPercent}% budget used`} icon={TrendingDown} tone="orange" />
-              <Metric label="Budget" value={formatDalasi(overview.finance.budget)} detail={`${formatDalasi(overview.finance.budgetRemaining)} remaining`} icon={CalendarClock} tone="navy" />
+              <Metric label="Sales" value={formatDalasi(overview.finance.income)} detail="All sales records" icon={Wallet} tone="blue" />
+              <Metric label="Running Cost" value={formatDalasi(overview.finance.expenses)} detail={`${overview.finance.budgetUsedPercent}% fixed cost used`} icon={TrendingDown} tone="orange" />
+              <Metric label="Fixed Cost" value={formatDalasi(overview.finance.budget)} detail={`${formatDalasi(overview.finance.budgetRemaining)} remaining`} icon={CalendarClock} tone="navy" />
               <Metric label="Net profit/loss" value={formatDalasi(overview.finance.profit)} detail={`${overview.finance.profitMargin}% margin | ${overview.finance.status}`} icon={overview.finance.status === 'PROFIT' ? TrendingUp : TrendingDown} tone={overview.finance.status === 'PROFIT' ? 'green' : 'orange'} />
             </section>
 
             <section className="finance-section">
-              <Panel eyebrow="Finance ledger" title="Excel-style records" className="finance-worksheet-panel">
-                <form className="finance-form" onSubmit={handleCreateFinanceRecord}>
-                  <select value={financeForm.type} onChange={(event) => setFinanceForm({ ...financeForm, type: event.target.value })}><option value="EXPENSE">Expense</option><option value="INCOME">Income</option><option value="BUDGET">Budget</option></select>
-                  <input placeholder="Category" value={financeForm.category} onChange={(event) => setFinanceForm({ ...financeForm, category: event.target.value })} required />
-                  <input placeholder="Description" value={financeForm.description} onChange={(event) => setFinanceForm({ ...financeForm, description: event.target.value })} />
-                  <input placeholder="Qty" value={financeForm.quantity} onChange={(event) => setFinanceForm({ ...financeForm, quantity: event.target.value })} />
-                  <input placeholder="Unit" value={financeForm.unit} onChange={(event) => setFinanceForm({ ...financeForm, unit: event.target.value })} />
-                  <input placeholder="Unit price" value={financeForm.unitPrice} onChange={(event) => setFinanceForm({ ...financeForm, unitPrice: event.target.value })} />
-                  <input placeholder="Amount" value={financeForm.amount} onChange={(event) => setFinanceForm({ ...financeForm, amount: event.target.value })} />
-                  <select value={financeForm.pondId} onChange={(event) => setFinanceForm({ ...financeForm, pondId: event.target.value })}><option value="">No pond</option>{data.ponds.map((pond) => <option key={pond.id} value={pond.id}>Pond {pond.number}</option>)}</select>
-                  <button className="primary-btn" type="submit"><Plus size={16} />Add row</button>
-                </form>
+              <Panel eyebrow="Finance ledger" title="Finance ledger records" className="finance-worksheet-panel">
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+                  <button type="button" className="primary-btn" onClick={() => setShowFinanceForm((current) => !current)}><Plus size={16} />{showFinanceForm ? 'Close' : 'Add row'}</button>
+                </div>
+
+                {showFinanceForm ? (
+                  <form className="finance-form" onSubmit={handleCreateFinanceRecord} style={{ display: 'grid', gridTemplateColumns: '140px 180px 150px 140px 110px 160px 130px 180px 1fr', gap: 12, marginBottom: 18, alignItems: 'center', padding: 12, background: 'rgba(15, 23, 42, 0.03)', border: '1px solid rgba(148, 163, 184, 0.35)', borderRadius: 12 }}>
+                    <select value={financeForm.type} onChange={(event) => setFinanceForm({ ...financeForm, type: event.target.value })}>
+                      <option value="EXPENSE">Running Cost</option>
+                      <option value="INCOME">Sales</option>
+                      <option value="BUDGET">Fixed Cost</option>
+                    </select>
+                    <input placeholder="Category" value={financeForm.category} onChange={(event) => setFinanceForm({ ...financeForm, category: event.target.value })} required />
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <input type="number" min="0" step="0.01" placeholder="Qty" value={financeForm.quantity} onChange={(event) => {
+                        const quantity = event.target.value;
+                        const unitPrice = Number(financeForm.unitPrice) || 0;
+                        const nextAmount = quantity && unitPrice ? (Number(quantity) * unitPrice).toFixed(2) : '';
+                        setFinanceForm({ ...financeForm, quantity, amount: nextAmount });
+                      }} />
+                      <select value={financeForm.unit} onChange={(event) => setFinanceForm({ ...financeForm, unit: event.target.value })}>
+                        {financeUnitOptions.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+                      </select>
+                    </div>
+                    <input type="number" min="0" step="0.01" placeholder="Unit price" value={financeForm.unitPrice} onChange={(event) => {
+                      const unitPrice = event.target.value;
+                      const quantity = Number(financeForm.quantity) || 0;
+                      const nextAmount = quantity && unitPrice ? (quantity * Number(unitPrice)).toFixed(2) : '';
+                      setFinanceForm({ ...financeForm, unitPrice, amount: nextAmount });
+                    }} />
+                    <input placeholder="Amount" value={financeForm.amount} readOnly />
+                    <select value={financeForm.pondId} onChange={(event) => setFinanceForm({ ...financeForm, pondId: event.target.value })}>
+                      <option value="">All ponds</option>
+                      {data.ponds.map((pond) => <option key={pond.id} value={pond.id}>Pond {pond.number}</option>)}
+                    </select>
+                    <button className="primary-btn" type="submit"><Plus size={16} />Save</button>
+                    <button type="button" className="secondary-btn" onClick={() => { setShowFinanceForm(false); setFinanceForm({ type: 'EXPENSE', category: '', quantity: '', unit: 'kg', unitPrice: '', amount: '', pondId: '' }); }}>Cancel</button>
+                  </form>
+                ) : null}
 
                 <FinanceTable records={data.financeRecords} onDelete={(id) => showDeleteConfirmation('finance', id, `Finance record ${id}`)} />
               </Panel>
@@ -1717,9 +2455,25 @@ function App() {
         {activeNav === 'inventory' && isOwner ? (
           <section className="dashboard-grid wide-left">
             <Panel eyebrow="Inventory" title="Stock levels">
-              <form className="compact-form inventory-form" onSubmit={handleCreateInventoryItem}>
-                <input placeholder="Item name" value={inventoryForm.name} onChange={(event) => setInventoryForm({ ...inventoryForm, name: event.target.value })} required />
-                      <select value={inventoryForm.category} onChange={(event) => setInventoryForm({ ...inventoryForm, category: event.target.value })} required>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+                <button type="button" className="primary-btn" onClick={() => setShowInventoryForm((current) => !current)}>
+                  <Plus size={16} />{showInventoryForm ? 'Close' : 'Add stock item'}
+                </button>
+              </div>
+
+              {showInventoryForm ? (
+                <div className="modal-backdrop" onClick={() => setShowInventoryForm(false)}>
+                  <div className="modal modal-md" onClick={(event) => event.stopPropagation()}>
+                    <h3>Add stock item</h3>
+                    <form className="compact-form inventory-form" onSubmit={handleCreateInventoryItem}>
+                      <select value={inventoryForm.category} onChange={(event) => {
+                        const nextCategory = event.target.value;
+                        setInventoryForm({
+                          ...inventoryForm,
+                          category: nextCategory,
+                          unit: getInventoryUnitForCategory(nextCategory),
+                        });
+                      }} required>
                         <option value="">Category</option>
                         <option value="FEED">Feed</option>
                         <option value="MEDICINE">Medicine</option>
@@ -1727,28 +2481,42 @@ function App() {
                         <option value="EQUIPMENT">Equipment</option>
                         <option value="SUPPLIES">Supplies</option>
                       </select>
-                      <input placeholder="Unit" value={inventoryForm.unit} onChange={(event) => setInventoryForm({ ...inventoryForm, unit: event.target.value })} required />
-                      <input placeholder="SKU (optional)" value={inventoryForm.sku} onChange={(event) => setInventoryForm({ ...inventoryForm, sku: event.target.value })} />
+                      {inventoryForm.category === 'FEED' ? (
+                        <select value={inventoryForm.feedSize} onChange={(event) => setInventoryForm({ ...inventoryForm, feedSize: event.target.value })}>
+                          {['1mm','1.5mm','2mm','2.5mm','3mm','3.5mm','4mm','4.5mm','5mm'].map((size) => (
+                            <option key={size} value={size}>{size}</option>
+                          ))}
+                        </select>
+                      ) : null}
+                      <input placeholder="Unit" value={inventoryForm.unit} readOnly />
                       <input placeholder="Current stock" type="number" value={inventoryForm.currentStock} onChange={(event) => setInventoryForm({ ...inventoryForm, currentStock: event.target.value })} />
                       <input placeholder="Min stock" type="number" value={inventoryForm.minStock} onChange={(event) => setInventoryForm({ ...inventoryForm, minStock: event.target.value })} />
-                      <button className="primary-btn" type="submit"><Plus size={16} />Add stock item</button>
+                      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                        <button type="button" className="secondary-btn" onClick={() => setShowInventoryForm(false)}>Cancel</button>
+                        <button className="primary-btn" type="submit">Save item</button>
+                      </div>
                     </form>
+                  </div>
+                </div>
+              ) : null}
 
-              <form className="compact-form inventory-adjust-form" onSubmit={handleInventoryAdjustment}>
-                <select value={inventoryAdjustment.itemId} onChange={(event) => setInventoryAdjustment({ ...inventoryAdjustment, itemId: event.target.value })} required>
-                  <option value="">Select item</option>
-                  {data.inventoryItems.map((item) => (
-                    <option key={item.id} value={item.id}>{item.name}</option>
-                  ))}
-                </select>
-                <select value={inventoryAdjustment.type} onChange={(event) => setInventoryAdjustment({ ...inventoryAdjustment, type: event.target.value })}>
-                  <option value="ADD">Restock</option>
-                  <option value="USE">Use / issue</option>
-                </select>
-                <input placeholder="Quantity" type="number" min="1" value={inventoryAdjustment.quantity} onChange={(event) => setInventoryAdjustment({ ...inventoryAdjustment, quantity: event.target.value })} required />
-                <input placeholder="Reason" value={inventoryAdjustment.reason} onChange={(event) => setInventoryAdjustment({ ...inventoryAdjustment, reason: event.target.value })} />
-                <button className="primary-btn" type="submit">Apply</button>
-              </form>
+              {restockItemId ? (
+                <div className="modal-backdrop" onClick={() => setRestockItemId(null)}>
+                  <div className="modal modal-sm" onClick={(event) => event.stopPropagation()}>
+                    <h3>Restock item</h3>
+                    <div style={{ display: 'grid', gap: 12 }}>
+                      <input type="number" min="1" step="0.1" placeholder="Quantity" value={restockQuantity} onChange={(event) => setRestockQuantity(event.target.value)} />
+                      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                        <button type="button" className="secondary-btn" onClick={() => setRestockItemId(null)}>Cancel</button>
+                        <button type="button" className="primary-btn" onClick={() => {
+                          if (!restockItemId) return;
+                          void handleInventoryRestock(restockItemId, restockQuantity);
+                        }}>Restock</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
 
               <div className="inventory-grid">
                 {data.inventoryItems.length === 0 ? (
@@ -1765,11 +2533,10 @@ function App() {
                             <strong>{item.name}</strong>
                             <span>{item.category} · {item.unit}</span>
                           </div>
-                                                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                                                    <span className={low ? 'warning-chip' : 'success-chip'}>{status}</span>
-                                                    <button type="button" className="danger-icon" onClick={() => showDeleteConfirmation('inventory', item.id, item.name)} aria-label="Delete inventory item"><Trash2 size={14} /></button>
-                                                  </div>
-                                                </div>
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                            <button type="button" className="primary-btn compact-btn" onClick={(event) => { event.stopPropagation(); setRestockItemId(item.id); setRestockQuantity(''); }} aria-label="Restock item">+</button>
+                          </div>
+                        </div>
                         <div className="inventory-metrics">
                           <div>
                             <span>On hand</span>
@@ -1780,9 +2547,13 @@ function App() {
                             <strong>{item.minStock ?? 0}</strong>
                           </div>
                           <div>
-                            <span>SKU</span>
-                            <strong>{item.sku || '—'}</strong>
+                            <span>Unit</span>
+                            <strong>{item.unit || '—'}</strong>
                           </div>
+                        </div>
+                        <div className="inventory-transaction">
+                          <small>Created</small>
+                          <span>{item.createdAt ? new Date(item.createdAt).toLocaleString() : 'Not recorded'}</span>
                         </div>
                         <div className="inventory-transaction">
                           <small>Last movement</small>
@@ -1811,6 +2582,7 @@ function App() {
      {toastMessage ? (
        <div className="toast">
          <span>{toastMessage}</span>
+         {pendingFinanceDelete ? <button type="button" className="secondary-btn" style={{ marginLeft: 12 }} onClick={() => void undoFinanceDelete()}>Undo</button> : null}
          {recentlyDeleted ? <button type="button" className="secondary-btn" style={{ marginLeft: 12 }} onClick={() => void undoDeleteInventory()}>Undo</button> : (lastCreatedHarvest ? <button type="button" className="secondary-btn" style={{ marginLeft: 12 }} onClick={() => void undoLastHarvest()}>Undo</button> : null)}
        </div>
      ) : null}
@@ -1922,7 +2694,7 @@ function PondSummaryPanel({
   }
 
   return (
-    <Panel eyebrow={`Pond ${pond.number}`} title={isOwner ? 'Owner inspection view' : 'Worker pond update'}>
+    <Panel eyebrow={`Pond ${pond.number}`} title={isOwner ? 'Admin inspection view' : 'Worker pond update'}>
       <div className={`pond-detail ${!isOwner ? 'worker-large' : ''}`}>
         <Fish size={34} />
         <div><span>Initial stock</span><strong>{initialStock} fish</strong></div>
@@ -2145,19 +2917,18 @@ function FinanceTable({ records, onDelete }: { records: any[]; onDelete: (id: st
   return (
     <div className="finance-table-wrap">
       <table className="finance-table">
-        <thead><tr><th>Date</th><th>Type</th><th>Category</th><th>Description</th><th>Qty</th><th>Unit</th><th>Unit Price</th><th>Amount</th><th>Pond</th><th></th></tr></thead>
+        <thead><tr><th>No.</th><th>Type</th><th>Category</th><th>Qty</th><th>Unit Price</th><th>Amount</th><th>Pond</th><th>Date</th><th></th></tr></thead>
         <tbody>
-          {records.map((record) => (
+          {records.map((record, index) => (
             <tr key={record.id}>
-              <td>{new Date(record.recordedAt).toLocaleDateString()}</td>
-              <td>{titleCase(record.type)}</td>
-              <td>{record.category}</td>
-              <td>{record.description || '-'}</td>
-              <td>{record.quantity ?? '-'}</td>
-              <td>{record.unit || '-'}</td>
+              <td>{index + 1}</td>
+              <td>{formatFinanceType(record.type)}</td>
+              <td>{record.category || '-'}</td>
+              <td>{record.quantity ? `${record.quantity} ${record.unit || ''}`.trim() : '-'}</td>
               <td>{record.unitPrice ? formatDalasi(record.unitPrice) : '-'}</td>
               <td>{formatDalasi(record.amount)}</td>
-              <td>{record.pond ? `Pond ${record.pond.number}` : '-'}</td>
+              <td>{record.pond ? `Pond ${record.pond.number}` : 'All ponds'}</td>
+              <td>{new Date(record.recordedAt).toLocaleDateString()}</td>
               <td><button className="danger-icon" onClick={() => { onDelete(record.id); }} aria-label="Delete finance record"><Trash2 size={15} /></button></td>
             </tr>
           ))}

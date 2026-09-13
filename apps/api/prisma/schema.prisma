@@ -18,8 +18,11 @@ model User {
   email           String            @unique
   name            String?
   password        String
+  loginCode       String?           // Special code for OWNER login
+  blocked         Boolean           @default(false)
   role            Role              @relation(fields: [roleId], references: [id])
   roleId          String
+  registrationCode RegistrationCode? @relation("codeUsedBy")
   farms           Farm[]            @relation("farm_members")
   ownedFarms      Farm[] // farms where user is owner
   assignedPonds   Pond[]            @relation("assigned_worker")
@@ -48,6 +51,17 @@ model Role {
   id    String   @id @default(uuid())
   name  RoleName @unique
   users User[]
+}
+
+model RegistrationCode {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  role      RoleName
+  isUsed    Boolean  @default(false)
+  usedBy    User?    @relation("codeUsedBy", fields: [usedById], references: [id])
+  usedById  String?  @unique
+  createdAt DateTime @default(now())
+  expiresAt DateTime?
 }
 
 model Session {
@@ -246,9 +260,6 @@ model InventoryTransaction {
   createdAt DateTime      @default(now())
 }
 
-
-
-
 model Attachment {
   id             String        @id @default(uuid())
   url            String
@@ -389,3 +400,4 @@ enum FinanceRecordType {
   EXPENSE
   BUDGET
 }
+

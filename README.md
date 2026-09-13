@@ -1,223 +1,52 @@
 # AquaCulture
 
-AquaCulture is a mobile-first aquaculture farm management platform designed for fish farming operations, field workflows, stock monitoring, task tracking, and owner-only financial oversight.
+AquaCulture is a mobile-first aquaculture management platform for fish farms, field crews, and farm owners.
 
 ## Stack
 
 - Frontend: React + Vite + TypeScript
 - Backend: Express + TypeScript
-- Database: PostgreSQL + Prisma ORM
+- Database: PostgreSQL + Prisma
 - Auth: JWT + bcrypt
-- Mobile-first design for farmworkers and owner oversight
 
-## Monorepo
+## Project structure
 
-- `apps/api` — REST API and Prisma schema
-- `apps/web` — React front end
+- `apps/web` — React frontend
+- `apps/api` — Express API and Prisma models
+- `.env.example` — environment template
 
 ## Quick start
 
 1. Install dependencies:
-   `npm install`
-2. Copy environment files:
-   `cp .env.example .env`
-3. Configure PostgreSQL and update `DATABASE_URL`.
+  `npm install`
+2. Copy environment settings:
+  `cp .env.example .env`
+3. If you do not have PostgreSQL running locally, the project also supports a SQLite development database by setting `DATABASE_URL="file:./prisma/dev.db"` in `.env`.
 4. Run Prisma setup:
-   `npm run db:generate`
-   `npm run db:push`
-   `npm run db:seed`
+  `npm run db:generate`
+  `npm run db:push`
+  `npm run db:seed`
 5. Start the app:
-   `npm run dev`
+  `npm run dev`
 
-## Demo role logins
+## Useful scripts
 
-- Farm Owner: `owner@aquaculture.localapp` / `Owner7614091`
-- farmworker: `worker@aquaculture.localapp` / `Worker5221`
+- `npm run dev` — run API and web app together
+- `npm run build` — build both apps
+- `npm run lint` — type-check both apps
+- `npm run db:generate` — generate Prisma client
+- `npm run db:push` — sync schema to the database
+- `npm run db:seed` — seed demo data
 
-The system enforces a strict two-role RBAC model: OWNER and WORKER. There is no separate system manager role in Prisma, the API, the UI, or the permission model.
+## Access roles
 
-this is the project design
-## Product direction
+- Owner role for financial and operational oversight
+- Worker role for field operations and pond management
 
-The project is intentionally structured for multi-farm readiness, worker-only field operations, owner-only finance controls, and future offline synchronization with audit-safe record handling.
+## Notes
 
-AquaCulture
-```
+This project is organized as a monorepo and keeps runtime code separate from generated and temporary files for easier maintenance.
 
-## Slogan
-
-```text
-Smart Aquaculture. Smarter Decisions.
-```
-
-Alternative:
-
-```text
-Manage Every Pond. Monitor Every Fish.
-```
-
----
-
-## Primary Colors
-
-```text
-Ocean Blue
-#1565C0
-```
-
-```text
-Deep Navy
-#0D47A1
-```
-
-```text
-Fresh Green
-#2E7D32
-```
-
-```text
-Warning Orange
-#F57C00
-```
-
-```text
-Danger Red
-#D32F2F
-```
-
-```text
-Background
-#F8FAFC
-```
-
-Dark Mode
-
-```text
-#0F172A
-```
-
----
-
-## Fonts
-
-Heading
-
-```text
-Poppins
-```
-
-Body
-
-```text
-Inter
-```
-
-Numbers
-
-```text
-Roboto Mono
-```
-
----
-
-# AquaCulture Ecosystem
-
-Instead of thinking about "one website," think about a complete platform.
-
-```text
-                    AquaCulture
-
-        ┌────────────────────────────┐
-        │        Web Application      │
-        └─────────────┬──────────────┘
-                      │
-      ┌───────────────┼────────────────┐
-      │               │                │
- Dashboard      REST API          Processing Engine
-      │               │                │
-      └───────────────┼────────────────┘
-                      │
-                 PostgreSQL
-                      │
-          Offline Synchronization
-                      │
-               Mobile PWA
-```
-
----
-
-# System Architecture
-
-```text
-Frontend (React)
-
-↓
-
-REST API (Express)
-
-↓
-
-Business Logic
-
-↓
-
-Prisma ORM
-
-↓
-
-PostgreSQL
-
-↓
-
-Cloud Backup
-```
-
-This is called a **layered architecture**, and it keeps the code organized and easy to maintain.
-
----
-
-# Database Version 2.0
-
-The schema you shared is a solid starting point. Here's how I would evolve it into an enterprise-grade design.
-
-## Core Tables
-
-```text
-farms
-
-farm_sites
-
-ponds
-
-fish_batches
-
-users
-
-roles
-
-permissions
-
-user_roles
-
-farm_members
-```
-
----
-
-## Daily Operations
-
-```text
-feeding_logs
-
-water_quality_logs
-
-water_change_logs
-
-mortality_logs
-
-observation_logs
-
-growth_sampling_logs
 ```
 
 Notice I renamed many tables to `*_logs`. This makes it immediately clear they store historical records.
@@ -320,8 +149,6 @@ Good Evening Dr. Bah
 ```
 
 
-<!-- Project summary, technologies and deployment details added below -->
-
 ## How it works
 
 AquaCulture is a monorepo with two apps:
@@ -343,29 +170,7 @@ Workflow summary:
 - Prisma ORM + PostgreSQL
 - JWT for auth and bcrypt for password hashing
 - Vite for dev server and build
-- Docker-friendly: services are designed to be containerized
-
-## Deployment (Render — recommended)
-
-This project is ready to deploy on Render using the included Blueprint at `.render/render.yaml`. It provisions:
-- `aquaculture-db` (managed PostgreSQL)
-- `aquaculture-api` (Node web service)
-- `aquaculture-web` (static site)
-
-Deploy steps:
-
-1. Sign in to https://render.com and create a new team or use your account (GitHub Student Pack credits may apply).
-2. Create a new PostgreSQL Database (Managed) on Render.
-3. Create a new Blueprint service in Render and point it to this repository (`.render/render.yaml`).
-4. Render will build/start with:
-   - API build: `npm ci && npm run db:generate -w @aquaculture/api && npm run build -w @aquaculture/api`
-   - API start: `npm run db:migrate:deploy -w @aquaculture/api && npm run start -w @aquaculture/api`
-   - Web build: `npm ci && npm run build -w @aquaculture/web`
-   - Web publish dir: `apps/web/dist`
-5. Confirm/set environment variables:
-   - API: `DATABASE_URL` (from Render DB), `JWT_SECRET`, `CLIENT_URL`
-   - Web: `VITE_API_URL` (example: `https://aquaculture-api.onrender.com/api`)
-6. Deploy and validate the site. Optional seed step: `npm run db:seed -w @aquaculture/api`.
+- Local development uses PostgreSQL and environment-managed configuration
 
 ## Local development quickstart
 
@@ -377,30 +182,9 @@ Deploy steps:
 6. npm run dev
 
 
-## Infrastructure-as-code (Render)
-
-A `.render/render.yaml` file is included to help Render create services and a managed Postgres instance when you connect the repo. Edit the YAML in the Render UI if you want custom plans, region, or env vars.
-
-
-## Notes about GitHub Student Pack
-
-GitHub Student Developer Pack can be used to obtain credits for Render or other hosting providers. Use those credits to provision the managed Postgres and web services. Render also integrates directly with GitHub for automatic deploys on push.
-
-
 ## License
 
 (keep license details here)
-
-
-## Contact
-
-If you want automated deployment via GitHub Actions instead of connecting Render directly, use `.github/workflows/render-deploy.yml`. Add the following repository secrets in GitHub settings before pushing to main:
-
-- RENDER_API_KEY — your Render API key (personal or service key)
-- RENDER_SERVICE_ID_API — the Render service ID for the backend
-- RENDER_SERVICE_ID_WEB — the Render service ID for the frontend
-
-The workflow builds both packages and triggers a deploy for each service through the Render API.
 
 
 ## Finance

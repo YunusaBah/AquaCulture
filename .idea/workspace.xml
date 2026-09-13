@@ -1,0 +1,214 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="BackgroundAgentGlobalSettings">
+    <option name="selectedModelId" value="auto" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="a134e491-888f-4bed-a802-281d0a1d101d" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/.github/workflows/render-deploy.yml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/.gitignore" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/dataSources.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/modules.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/sqldialects.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/vcs.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.render/render.yaml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.vscode/settings.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/AquaCulture.iml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/api/Dockerfile" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/api/prisma/migrations/20260831_two_role_rbac/migration.sql" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/api/prisma/migrations/20260831_two_role_rbac/migration_lock.toml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/api/prisma/schema.prisma" beforeDir="false" afterPath="$PROJECT_DIR$/apps/api/prisma/schema.prisma" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/api/prisma/seed.ts" beforeDir="false" afterPath="$PROJECT_DIR$/apps/api/prisma/seed.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/api/src/__tests__/rbac.test.ts" beforeDir="false" afterPath="$PROJECT_DIR$/apps/api/src/__tests__/rbac.test.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/api/src/config/index.ts" beforeDir="false" afterPath="$PROJECT_DIR$/apps/api/src/config/index.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/api/src/config/permissions.ts" beforeDir="false" afterPath="$PROJECT_DIR$/apps/api/src/config/permissions.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/api/src/controllers/auth.ts" beforeDir="false" afterPath="$PROJECT_DIR$/apps/api/src/controllers/auth.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/api/src/controllers/ponds.ts.bak" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/api/src/lib/devUsers.ts" beforeDir="false" afterPath="$PROJECT_DIR$/apps/api/src/lib/devUsers.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/api/src/lib/prisma.ts" beforeDir="false" afterPath="$PROJECT_DIR$/apps/api/src/lib/prisma.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/api/src/middleware/auth.ts" beforeDir="false" afterPath="$PROJECT_DIR$/apps/api/src/middleware/auth.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/api/src/routes/auth.ts" beforeDir="false" afterPath="$PROJECT_DIR$/apps/api/src/routes/auth.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/web/Dockerfile" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/web/src/App.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/apps/web/src/App.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/web/src/lib/permissions.ts" beforeDir="false" afterPath="$PROJECT_DIR$/apps/web/src/lib/permissions.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/web/src/styles.css" beforeDir="false" afterPath="$PROJECT_DIR$/apps/web/src/styles.css" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docker-compose.yml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/aquaculture-architecture.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/qc" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/render.yaml" beforeDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="CopilotPersistence">
+    <persistenceIdMap>
+      <entry key="_C:/Users/kebba/Desktop/Aquaculture" value="3IO0BJbF91Rwy0vtbtiW2xuEcPN" />
+    </persistenceIdMap>
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="McpProjectServerCommands">
+    <commands />
+    <urls />
+  </component>
+  <component name="ProblemsViewState">
+    <option name="selectedTabId" value="ProjectErrors" />
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 3,
+  &quot;fromUser&quot;: false
+}</component>
+  <component name="ProjectId" id="3IO09hRTZwxq72emsACPwQsLj5m" />
+  <component name="ProjectSessionTemplates">
+    <option name="inlineTemplate">
+      <template>
+        <option name="modeId" value="InlineAgent" />
+        <option name="model">
+          <model>
+            <option name="modelProviderName" value="OpenAI" />
+            <option name="modelType" value="byok_id" />
+            <option name="modelValue" value="o4-mini" />
+          </model>
+        </option>
+        <option name="targetType" value="LOCAL" />
+      </template>
+    </option>
+    <option name="panelTemplate">
+      <template>
+        <option name="modeId" value="Agent" />
+        <option name="model">
+          <model>
+            <option name="modelType" value="builtin_id" />
+            <option name="modelValue" value="auto" />
+          </model>
+        </option>
+        <option name="targetType" value="BACKGROUND" />
+        <option name="worktreeMode" value="WORKSPACE" />
+      </template>
+    </option>
+  </component>
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.MCP Project settings loaded&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
+    &quot;com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultModelSelectionForGA.v1&quot;: &quot;true&quot;,
+    &quot;copilot.chat.legacySessionMetadata.migrated&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+    &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
+    &quot;junie.onboarding.icon.badge.shown&quot;: &quot;true&quot;,
+    &quot;kotlin-language-version-configured&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;npm.install.executor&quot;: &quot;Run&quot;,
+    &quot;run.code.analysis.last.selected.profile&quot;: &quot;pProject Default&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;ml.llm.AcpAgentsConfigurable&quot;,
+    &quot;to.speed.mode.migration.done&quot;: &quot;true&quot;,
+    &quot;ts.external.directory.path&quot;: &quot;C:\\Users\\kebba\\AppData\\Local\\Programs\\IntelliJ IDEA\\plugins\\javascript-plugin\\jsLanguageServicesImpl\\external&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
+  },
+  &quot;keyToStringList&quot;: {
+    &quot;DatabaseDriversLRU&quot;: [
+      &quot;postgresql&quot;
+    ]
+  }
+}</component>
+  <component name="RunManager">
+    <configuration default="true" type="JetRunConfigurationType">
+      <module name="AquaCulture" />
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
+    <configuration default="true" type="KotlinStandaloneScriptRunConfigurationType">
+      <module name="AquaCulture" />
+      <option name="filePath" />
+      <method v="2" />
+    </configuration>
+  </component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-jdk-30f59d01ecdd-2fc7cc6b9a17-intellij.indexing.shared.core-IU-253.33813.55" />
+        <option value="bundled-js-predefined-d6986cc7102b-9b0f141eb926-JavaScript-IU-253.33813.55" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="a134e491-888f-4bed-a802-281d0a1d101d" name="Changes" comment="" />
+      <created>1787620159282</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1787620159282</updated>
+      <workItem from="1787620161072" duration="28000" />
+      <workItem from="1787620224751" duration="10680000" />
+      <workItem from="1787704672803" duration="229000" />
+      <workItem from="1787774460165" duration="11843000" />
+      <workItem from="1787947073970" duration="7612000" />
+      <workItem from="1788131410690" duration="2544000" />
+      <workItem from="1788134493261" duration="6043000" />
+      <workItem from="1788178442824" duration="12153000" />
+      <workItem from="1788310764026" duration="5524000" />
+      <workItem from="1788430793851" duration="32000" />
+      <workItem from="1788430887697" duration="2517000" />
+      <workItem from="1788438303257" duration="7322000" />
+      <workItem from="1788446380924" duration="4126000" />
+      <workItem from="1788459497903" duration="12000" />
+      <workItem from="1788459539446" duration="29836000" />
+      <workItem from="1788649034949" duration="9675000" />
+      <workItem from="1788883510868" duration="9157000" />
+      <workItem from="1788906015466" duration="106000" />
+      <workItem from="1788906147228" duration="7914000" />
+      <workItem from="1788975531902" duration="5657000" />
+      <workItem from="1788983818908" duration="469000" />
+      <workItem from="1788984687308" duration="7570000" />
+      <workItem from="1789078264350" duration="7787000" />
+      <workItem from="1789087234612" duration="910000" />
+      <workItem from="1789161316944" duration="124000" />
+      <workItem from="1789161481022" duration="765000" />
+      <workItem from="1789162313585" duration="352000" />
+      <workItem from="1789162696189" duration="17786000" />
+      <workItem from="1789214342616" duration="1157000" />
+      <workItem from="1789215571235" duration="8131000" />
+      <workItem from="1789247461909" duration="17173000" />
+    </task>
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+    <option name="exactExcludedFiles">
+      <list>
+        <option value="$PROJECT_DIR$/apps/api/prisma.config.js" />
+        <option value="$PROJECT_DIR$/apps/api/prisma.config.cjs" />
+        <option value="$PROJECT_DIR$/apps/api/prisma/prisma.config.js" />
+        <option value="$PROJECT_DIR$/apps/api/prisma/seed.js" />
+      </list>
+    </option>
+  </component>
+  <component name="VcsManagerConfiguration">
+    <option name="MARK_IGNORED_AS_EXCLUDED" value="true" />
+  </component>
+  <component name="XSLT-Support.FileAssociations.UIState">
+    <expand />
+    <select />
+  </component>
+</project>
