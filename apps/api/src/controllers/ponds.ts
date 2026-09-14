@@ -196,7 +196,7 @@ export async function createPond(req: AuthRequest, res: Response) {
   if (req.userRole === 'WORKER') {
     return res.status(403).json({ error: 'Workers cannot create ponds' });
   }
-  const { siteId, number, species, capacity, currentVolume, status, createdAt, initialPopulation, stockedAt, initialAvgWeightG, targetHarvestKg, expectedGrowthGDay } = req.body as {
+  const { siteId, number, species, capacity, currentVolume, status, createdAt, initialPopulation, stockedAt, initialAvgWeightG, targetHarvestKg, expectedGrowthGDay, assignedUserId } = req.body as {
     siteId?: string;
     number?: number;
     species?: string;
@@ -209,6 +209,7 @@ export async function createPond(req: AuthRequest, res: Response) {
     initialAvgWeightG?: number;
     targetHarvestKg?: number;
     expectedGrowthGDay?: number;
+    assignedUserId?: string | null;
   };
 
   if (!siteId || !number || !species || !capacity) {
@@ -228,7 +229,7 @@ export async function createPond(req: AuthRequest, res: Response) {
       initialAvgWeightG: initialAvgWeightG ?? null,
       targetHarvestKg: targetHarvestKg ?? null,
       expectedGrowthGDay: expectedGrowthGDay ?? null,
-      assignedUserId: null,
+      assignedUserId: assignedUserId || null,
       status: (status as any) || 'ACTIVE',
       createdAt: createdAt ? new Date(createdAt) : undefined,
     },
@@ -266,9 +267,63 @@ export async function updatePond(req: AuthRequest, res: Response) {
   const { id } = req.params;
   const data = req.body;
   try {
+    const existing = await prisma.pond.findUnique({
+      where: { id },
+      select: { number: true, assignedUserId: true, targetHarvestDate: true, site: { select: { name: true } } },
+    });
+
+    if (!existing) {
+      return res.status(404).json({ error: 'Pond not found' });
+    }
+
     const pond = await prisma.pond.update({ where: { id }, data, include: { site: true, assignedUser: true, attachments: true } });
+
+    const workerIds = new Set<string>();
+    if (data.assignedUserId) workerIds.add(data.assignedUserId);
+    if (existing.assignedUserId && existing.assignedUserId !== data.assignedUserId) workerIds.add(existing.assignedUserId);
+
+    if (data.targetHarvestDate !== undefined && data.targetHarvestDate !== null) {
+      const targetDate = new Date(data.targetHarvestDate);
+      const workers = await prisma.user.findMany({
+        where: { role: { name: 'WORKER' } },
+        select: { id: true, name: true },
+      });
+      await Promise.all(workers.map((worker) => createNotificationForUser(
+        worker.id,
+        `Target harvest updated for Pond ${pond.number}`,
+        `${req.user?.name || 'Farm admin'} set the target harvest date to ${targetDate.toLocaleDateString()} for ${existing.site?.name || 'the pond'}.`,
+        { pondId: pond.id, type: 'TARGET_HARVEST_UPDATED' },
+      )));
+    }
+
+    if (data.assignedUserId !== undefined && data.assignedUserId) {
+      const assignedUser = await prisma.user.findUnique({ where: { id: data.assignedUserId }, select: { id: true, name: true } });
+      if (assignedUser) {
+        await createNotificationForUser(
+          assignedUser.id,
+          `Pond ${pond.number} assigned to you`,
+          `${req.user?.name || 'Farm admin'} assigned Pond ${pond.number} to ${assignedUser.name || 'you'}.`,
+          { pondId: pond.id, type: 'POND_ASSIGNED' },
+        );
+      }
+    }
+
+    if (workerIds.size > 0) {
+      const workers = await prisma.user.findMany({
+        where: { id: { in: Array.from(workerIds) }, role: { name: 'WORKER' } },
+        select: { id: true },
+      });
+      await Promise.all(workers.map((worker) => createNotificationForUser(
+        worker.id,
+        `Pond ${pond.number} update`,
+        `${req.user?.name || 'Farm admin'} updated pond management details for pond ${pond.number}.`,
+        { pondId: pond.id, type: 'POND_UPDATED' },
+      )));
+    }
+
     res.json({ pond });
   } catch (e) {
+    console.error('Failed to update pond', e);
     res.status(400).json({ error: 'Failed to update pond' });
   }
 }

@@ -3,7 +3,6 @@ import {
   Activity,
   AlertTriangle,
   Bell,
-  BrainCircuit,
   CalendarClock,
   CheckCircle2,
   ClipboardList,
@@ -155,6 +154,7 @@ function App() {
   const [isOnline, setIsOnline] = useState<boolean>(() => (typeof navigator === 'undefined' ? true : navigator.onLine));
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [syncQueueOpen, setSyncQueueOpen] = useState(false);
   const [workerRoster, setWorkerRoster] = useState<any[]>([]);
   const [workerAccessModal, setWorkerAccessModal] = useState<{ open: boolean; worker?: any; action?: 'block' | 'unblock' } | null>(null);
   const [workerSearchTerm, setWorkerSearchTerm] = useState('');
@@ -252,7 +252,13 @@ function App() {
     stockedAt: '',
     initialAvgWeightG: '',
     targetHarvestKg: '',
+    targetHarvestUnit: 'g' as 'g' | 'kg',
+    assignedUserId: 'all',
   });
+  const [adminActionModal, setAdminActionModal] = useState<{ type: 'targetHarvest' | 'recommendFeed' | 'mortality' } | null>(null);
+  const [targetHarvestAction, setTargetHarvestAction] = useState({ pondId: '', date: '', time: '09:00' });
+  const [recommendFeedAction, setRecommendFeedAction] = useState({ pondId: '', inventoryItemId: '', feedSize: '1mm', quantityKg: '1' });
+  const [mortalityAction, setMortalityAction] = useState({ pondId: '', count: '', cause: '', observedAt: '' });
   const [showPondCreateModal, setShowPondCreateModal] = useState(false);
   const [financeForm, setFinanceForm] = useState({
     type: 'EXPENSE',
@@ -690,30 +696,12 @@ function App() {
   const overview = useMemo(() => {
     const totalFeed = data.feedings.reduce((sum, item) => sum + Number(item.quantityKg || 0), 0);
     const totalMortality = data.mortalityLogs.reduce((sum, item) => sum + Number(item.numberDead || 0), 0);
+    const latestFeedSize = [...data.feedings].sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())[0]?.feedSize || 'Not recorded';
     const lowStock = data.inventoryItems.filter((item) => Number(item.currentStock || 0) <= Number(item.minStock || 0)).length;
     const finance = data.finance || { income: 0, expenses: 0, budget: 0, profit: 0, status: 'PROFIT', profitMargin: 0, budgetUsedPercent: 0 };
-    return { totalFeed, totalMortality, lowStock, finance, healthScore: totalMortality > 10 ? 82 : 96 };
+    return { totalFeed, totalMortality, lowStock, finance, healthScore: totalMortality > 10 ? 82 : 96, latestFeedSize };
   }, [data]);
 
-
-  const feedRecommendations = useMemo(() => data.ponds
-    .map((pond) => {
-      const avg = Number(pond.initialAvgWeightG ?? 0);
-      const recommendedSize = getRecommendedFeedSize(avg);
-      const currentSize = pond.feedLogs?.[0]?.feedSize || recommendedSize;
-      return {
-        id: pond.id,
-        number: pond.number,
-        site: pond.site?.name || 'Farm site',
-        avgWeight: avg,
-        recommendedSize,
-        currentSize,
-        needsChange: currentSize !== recommendedSize,
-      };
-    })
-    .filter((pond) => pond.avgWeight > 0)
-    .sort((a, b) => Number(b.needsChange) - Number(a.needsChange) || b.avgWeight - a.avgWeight)
-    .slice(0, 5), [data.ponds]);
 
   async function handleLogin(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -824,6 +812,113 @@ function App() {
     );
   }, [data.notifications, markNotificationRead, token]);
 
+  async function handleTargetHarvestActionSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!token || !isOwner) return;
+
+    const pondId = targetHarvestAction.pondId || selectedPondId || '';
+    if (!pondId || !targetHarvestAction.date) {
+      setToastMessage('Select a pond and choose a harvest date.');
+      return;
+    }
+
+    const timestamp = new Date(`${targetHarvestAction.date}T${targetHarvestAction.time || '09:00'}`);
+    const response = await fetch(`${apiBaseUrl}/ponds/${pondId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' },
+      body: JSON.stringify({ targetHarvestDate: timestamp.toISOString() }),
+    });
+
+    if (!response.ok) {
+      const bodyText = await response.text().catch(() => '');
+      let parsed; try { parsed = JSON.parse(bodyText || '{}'); } catch { parsed = { error: bodyText || response.statusText }; }
+      setToastMessage(parsed.error || parsed.message || `Server error ${response.status}`);
+      return;
+    }
+
+    setAdminActionModal(null);
+    setTargetHarvestAction({ pondId: '', date: '', time: '09:00' });
+    setToastMessage('Target harvest date saved.');
+    await loadData();
+    if (selectedPondId === pondId) await openPond(pondId);
+  }
+
+  async function handleRecommendFeedActionSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!token || !isOwner) return;
+
+    const pondId = recommendFeedAction.pondId || selectedPondId || '';
+    if (!pondId) {
+      setToastMessage('Select a pond before recommending feed.');
+      return;
+    }
+
+    const item = data.inventoryItems.find((entry) => entry.id === recommendFeedAction.inventoryItemId);
+    const quantityKg = Number(recommendFeedAction.quantityKg) || 1;
+    const response = await fetch(`${apiBaseUrl}/feedings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' },
+      body: JSON.stringify({
+        pondId,
+        quantityKg,
+        feedSize: recommendFeedAction.feedSize || '1mm',
+        feedType: item?.name || 'Pellet',
+        inventoryItemId: recommendFeedAction.inventoryItemId || undefined,
+        appetite: 5,
+        observation: 'Admin recommended feed adjustment',
+      }),
+    });
+
+    if (!response.ok) {
+      const bodyText = await response.text().catch(() => '');
+      let parsed; try { parsed = JSON.parse(bodyText || '{}'); } catch { parsed = { error: bodyText || response.statusText }; }
+      setToastMessage(parsed.error || parsed.message || `Server error ${response.status}`);
+      return;
+    }
+
+    setAdminActionModal(null);
+    setRecommendFeedAction({ pondId: '', inventoryItemId: '', feedSize: '1mm', quantityKg: '1' });
+    setToastMessage('Feed recommendation recorded.');
+    await loadData();
+    if (selectedPondId === pondId) await openPond(pondId);
+  }
+
+  async function handleMortalityActionSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!token || !isOwner) return;
+
+    const pondId = mortalityAction.pondId || selectedPondId || '';
+    const count = Number(mortalityAction.count) || 0;
+    if (!pondId || count <= 0) {
+      setToastMessage('Select a pond and enter a valid mortality count.');
+      return;
+    }
+
+    const response = await fetch(`${apiBaseUrl}/mortality`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' },
+      body: JSON.stringify({
+        pondId,
+        numberDead: count,
+        possibleCause: mortalityAction.cause || 'Unspecified',
+        observedAt: mortalityAction.observedAt || new Date().toISOString(),
+      }),
+    });
+
+    if (!response.ok) {
+      const bodyText = await response.text().catch(() => '');
+      let parsed; try { parsed = JSON.parse(bodyText || '{}'); } catch { parsed = { error: bodyText || response.statusText }; }
+      setToastMessage(parsed.error || parsed.message || `Server error ${response.status}`);
+      return;
+    }
+
+    setAdminActionModal(null);
+    setMortalityAction({ pondId: '', count: '', cause: '', observedAt: '' });
+    setToastMessage('Mortality record saved.');
+    await loadData();
+    if (selectedPondId === pondId) await openPond(pondId);
+  }
+
   async function handleCreatePond(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!token || !isOwner) return;
@@ -832,6 +927,11 @@ function App() {
     const pondNumber = Number(newPond.number);
     const capacity = Number(newPond.capacity);
     const initialPopulation = Number(newPond.initialPopulation) || undefined;
+    const targetHarvestValue = Number(newPond.targetHarvestKg) || undefined;
+    const targetHarvestKg = targetHarvestValue !== undefined
+      ? Number((newPond.targetHarvestUnit === 'g' ? targetHarvestValue / 1000 : targetHarvestValue).toFixed(6))
+      : undefined;
+    const assignedUserId = newPond.assignedUserId && newPond.assignedUserId !== 'all' ? newPond.assignedUserId : undefined;
 
     if (!siteName) {
       setToastMessage('Site name is required.');
@@ -842,7 +942,23 @@ function App() {
       return;
     }
     if (!Number.isFinite(capacity) || capacity <= 0) {
-      setToastMessage('Capacity must be greater than zero.');
+      setToastMessage('Water volume must be greater than zero.');
+      return;
+    }
+    if (!initialPopulation || !Number.isFinite(initialPopulation) || initialPopulation <= 0) {
+      setToastMessage('Initial stock fish is required.');
+      return;
+    }
+    if (!newPond.stockedAt) {
+      setToastMessage('Stocked on date is required.');
+      return;
+    }
+    if (!newPond.initialAvgWeightG || Number(newPond.initialAvgWeightG) <= 0) {
+      setToastMessage('Initial average weight is required.');
+      return;
+    }
+    if (!newPond.targetHarvestKg || Number(newPond.targetHarvestKg) <= 0) {
+      setToastMessage('Target harvest weight is required.');
       return;
     }
 
@@ -861,9 +977,10 @@ function App() {
         initialPopulation,
         stockedAt: newPond.stockedAt || undefined,
         initialAvgWeightG: Number(newPond.initialAvgWeightG) || undefined,
-        targetHarvestKg: Number(newPond.targetHarvestKg) || undefined,
+        targetHarvestKg,
+        assignedUserId,
       }, 'pond');
-      setNewPond({ siteName: '', number: '', species: 'TILAPIA', capacity: '', initialPopulation: '', stockedAt: '', initialAvgWeightG: '', targetHarvestKg: '' });
+      setNewPond({ siteName: '', number: '', species: 'TILAPIA', capacity: '', initialPopulation: '', stockedAt: '', initialAvgWeightG: '', targetHarvestKg: '', targetHarvestUnit: 'g', assignedUserId: 'all' });
       setShowPondCreateModal(false);
       setToastMessage('Pond queued for sync while offline.');
       return;
@@ -903,7 +1020,8 @@ function App() {
         initialPopulation,
         stockedAt: newPond.stockedAt || undefined,
         initialAvgWeightG: Number(newPond.initialAvgWeightG) || undefined,
-        targetHarvestKg: Number(newPond.targetHarvestKg) || undefined,
+        targetHarvestKg,
+        assignedUserId,
       }),
     });
     const pondBody = await pondRes.json().catch(() => ({}));
@@ -912,7 +1030,7 @@ function App() {
       return;
     }
 
-    setNewPond({ siteName: '', number: '', species: 'TILAPIA', capacity: '', initialPopulation: '', stockedAt: '', initialAvgWeightG: '', targetHarvestKg: '' });
+    setNewPond({ siteName: '', number: '', species: 'TILAPIA', capacity: '', initialPopulation: '', stockedAt: '', initialAvgWeightG: '', targetHarvestKg: '', targetHarvestUnit: 'g', assignedUserId: 'all' });
     setShowPondCreateModal(false);
     setToastMessage(`Pond ${pondNumber} created successfully.`);
     await loadData();
@@ -1703,8 +1821,16 @@ function App() {
     );
   }
 
+  const overlayVisible = notificationsOpen || syncQueueOpen;
+
   return (
-    <div className={`app-shell ${sidebarOpen ? 'sidebar-open' : 'sidebar-closed'}`}>
+    <>
+      {overlayVisible ? (
+        <div className="global-veil visible" onClick={() => { setNotificationsOpen(false); setSyncQueueOpen(false); }} />
+      ) : (
+        <div className="global-veil" />
+      )}
+      <div className={`app-shell ${sidebarOpen ? 'sidebar-open' : 'sidebar-closed'} ${overlayVisible ? 'overlay-open' : ''}`}>
       {harvestModal.open ? (
         <div className="modal-backdrop">
           <div className="modal modal-md">
@@ -1851,9 +1977,45 @@ function App() {
             </div>
           </div>
           <div className="topbar-actions">
-            <div className={isOnline ? 'sync-status online' : 'sync-status offline'}>
-              <span className="sync-dot" />
-              {isOnline ? 'Online' : 'Offline'} · {pendingSyncCount} pending sync
+            <div className="sync-status-wrap">
+              <button
+                type="button"
+                className={isOnline ? 'sync-status online' : 'sync-status offline'}
+                onClick={() => setSyncQueueOpen((value) => !value)}
+                aria-label="Pending sync actions"
+              >
+                <span className="sync-dot" />
+                {isOnline ? 'Online' : 'Offline'} · {pendingSyncCount} pending
+              </button>
+              {syncQueueOpen ? (
+                <div className="sync-panel">
+                  <div className="notification-panel-header">
+                    <strong>Sync queue</strong>
+                    <button type="button" className="secondary-btn" onClick={() => setSyncQueueOpen(false)}>Close</button>
+                  </div>
+                  <div className="sync-panel-body">
+                    {(() => {
+                      const entries = readQueuedSyncEntries();
+                      if (!entries.length) {
+                        return <p className="empty-copy">No pending actions right now.</p>;
+                      }
+                      return entries.slice(0, 8).map((item: Record<string, any>) => (
+                        <div key={item.id} className="sync-item">
+                          <strong>{item.action}</strong>
+                          <span>{item.tableName}</span>
+                          <small>{new Date(item.createdAt).toLocaleString()}</small>
+                        </div>
+                      ));
+                    })()}
+                  </div>
+                  <div className="modal-actions compact-actions">
+                    <button type="button" className="secondary-btn" onClick={() => setSyncQueueOpen(false)}>Close</button>
+                    <button type="button" className="primary-btn" onClick={async () => { setSyncQueueOpen(false); if (navigator.onLine) { await flushOfflineSyncQueue(); } else { setToastMessage('You are offline. Actions will sync automatically when online again.'); } }}>
+                      {isOnline ? 'Sync now' : 'Queue waiting'}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
             </div>
             <div className="notifications-wrap">
               <button
@@ -1926,7 +2088,7 @@ function App() {
           <>
             <section className="metrics-grid">
               <Metric label="Farm health" value={`${overview.healthScore}%`} detail="Based on mortality and water risk" icon={Activity} tone="blue" />
-              <Metric label="Feed logged" value={`${overview.totalFeed || 0} kg`} detail="Stored feeding records" icon={Sprout} tone="green" />
+              <Metric label="Feed logged" value={`${overview.totalFeed || 0} kg`} detail={overview.latestFeedSize !== 'Not recorded' ? `Size used: ${overview.latestFeedSize}` : 'No feed size logged yet'} icon={Sprout} tone="green" />
               <Metric label="Mortality" value={`${overview.totalMortality || 0} fish`} detail="Stored mortality records" icon={AlertTriangle} tone="orange" />
               {isOwner ? (
                 <Metric label="Net position" value={formatDalasi(overview.finance.profit)} detail={overview.finance.status === 'PROFIT' ? 'Running profit' : 'Running loss'} icon={overview.finance.status === 'PROFIT' ? TrendingUp : TrendingDown} tone={overview.finance.status === 'PROFIT' ? 'green' : 'orange'} />
@@ -1960,45 +2122,6 @@ function App() {
                   </button>
                 )} />
               </Panel>
-              <Panel eyebrow="Recommendation" title="Immediate action">
-                <div className="insight-callout">
-                  <BrainCircuit size={28} />
-                  <p>Pond records now combine feeding, mortality, water quality, and harvest timing so the owner can inspect each pond without calling workers.</p>
-                </div>
-              </Panel>
-              <Panel eyebrow="Feed recommendation" title="Feed by fish size">
-                <div className="record-list">
-                  {feedRecommendations.length === 0 ? (
-                    <p className="empty-copy">No feed-size data yet for active ponds.</p>
-                  ) : (
-                    feedRecommendations.map((pond) => (
-                      <div
-                        className={pond.needsChange ? 'record-row alert-row priority-row' : 'record-row priority-row'}
-                        key={pond.id}
-                        style={pond.needsChange ? { borderLeft: '4px solid #f59e0b', background: 'rgba(245, 158, 11, 0.04)' } : { borderLeft: '4px solid #2e7d32', background: 'rgba(46, 125, 50, 0.03)' }}
-                      >
-                        <div className="priority-row-main">
-                          <div>
-                            <strong>Pond {pond.number}</strong>
-                            <span>{pond.site}</span>
-                          </div>
-                          <span className={pond.needsChange ? 'priority-label warning' : 'priority-label success'}>
-                            {pond.needsChange ? 'Priority action' : 'On target'}
-                          </span>
-                        </div>
-                        <div className="pond-stats">
-                          <span>{pond.avgWeight} g</span>
-                          <span>{pond.currentSize}</span>
-                          <span className={pond.needsChange ? 'warning-chip' : 'success-chip'}>{pond.needsChange ? 'Adjust to ' + pond.recommendedSize : 'Good size'}</span>
-                          <button type="button" className="secondary-btn compact-btn" onClick={() => applyRecommendedFeedSize(pond.id, pond.recommendedSize)}>
-                            {pond.needsChange ? `Use ${pond.recommendedSize}` : 'Keep this size'}
-                          </button>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </Panel>
               <Panel eyebrow="Notifications" title="Recent updates">
                 <RecordList records={data.notifications.slice(0, 5)} emptyTitle="No notifications yet" render={(item) => <><strong>{item.title}</strong><span>{new Date(item.createdAt).toLocaleString()}</span></>} />
               </Panel>
@@ -2019,10 +2142,10 @@ function App() {
 
                   {showPondCreateModal ? (
                     <div className="modal-backdrop" onClick={() => setShowPondCreateModal(false)}>
-                      <div className="modal worker-modal" onClick={(event) => event.stopPropagation()}>
+                      <div className="modal worker-modal pond-form-compact" onClick={(event) => event.stopPropagation()}>
                         <h3>New pond profile</h3>
                         <form className="worker-create-form" onSubmit={handleCreatePond}>
-                          <label className="worker-field">
+                          <label className="worker-field full-width">
                             <span>Site name</span>
                             <input value={newPond.siteName} onChange={(event) => setNewPond({ ...newPond, siteName: event.target.value })} placeholder="North Lagoon" required />
                           </label>
@@ -2034,7 +2157,7 @@ function App() {
 
                           <label className="worker-field">
                             <span>Species</span>
-                            <select value={newPond.species} onChange={(event) => setNewPond({ ...newPond, species: event.target.value })}>
+                            <select value={newPond.species} onChange={(event) => setNewPond({ ...newPond, species: event.target.value })} required>
                               <option value="TILAPIA">Tilapia</option>
                               <option value="CATFISH">Catfish</option>
                               <option value="TROUT">Trout</option>
@@ -2044,32 +2167,50 @@ function App() {
                           </label>
 
                           <label className="worker-field">
-                            <span>Capacity (m³)</span>
-                            <input value={newPond.capacity} onChange={(event) => setNewPond({ ...newPond, capacity: event.target.value })} placeholder="500" required />
+                            <span>Water volume (litres)</span>
+                            <input type="number" min="1" step="1" value={newPond.capacity} onChange={(event) => setNewPond({ ...newPond, capacity: event.target.value })} placeholder="5000" required />
                           </label>
 
                           <label className="worker-field">
-                            <span>Initial fish</span>
-                            <input value={newPond.initialPopulation} onChange={(event) => setNewPond({ ...newPond, initialPopulation: event.target.value })} placeholder="400" />
+                            <span>Initial stock fish</span>
+                            <input type="number" min="1" step="1" value={newPond.initialPopulation} onChange={(event) => setNewPond({ ...newPond, initialPopulation: event.target.value })} placeholder="400" required />
                           </label>
 
                           <label className="worker-field">
                             <span>Stocked on</span>
-                            <input type="date" value={newPond.stockedAt} onChange={(event) => setNewPond({ ...newPond, stockedAt: event.target.value })} />
+                            <input type="date" value={newPond.stockedAt} onChange={(event) => setNewPond({ ...newPond, stockedAt: event.target.value })} required />
                           </label>
 
                           <label className="worker-field">
                             <span>Initial avg weight (g)</span>
-                            <input value={newPond.initialAvgWeightG} onChange={(event) => setNewPond({ ...newPond, initialAvgWeightG: event.target.value })} placeholder="0.01" />
+                            <input type="number" min="0" step="0.01" value={newPond.initialAvgWeightG} onChange={(event) => setNewPond({ ...newPond, initialAvgWeightG: event.target.value })} placeholder="0.01" required />
                           </label>
 
-                          <label className="worker-field">
-                            <span>Target harvest (kg)</span>
-                            <input value={newPond.targetHarvestKg} onChange={(event) => setNewPond({ ...newPond, targetHarvestKg: event.target.value })} placeholder="200" />
-                          </label>
+                          <div className="inline-fields">
+                            <label className="worker-field">
+                              <span>Assign worker</span>
+                              <select value={newPond.assignedUserId} onChange={(event) => setNewPond({ ...newPond, assignedUserId: event.target.value })}>
+                                <option value="all">All workers</option>
+                                {workers.filter((worker) => worker.role?.name === 'WORKER' || worker.role === 'WORKER').map((worker) => (
+                                  <option key={worker.id} value={worker.id}>{worker.name || worker.email}</option>
+                                ))}
+                              </select>
+                            </label>
 
-                          <div className="worker-form-footer">
-                            <small className="helper-text">Create a pond and it will appear in the registry immediately.</small>
+                            <label className="worker-field">
+                              <span>Target harvest weight</span>
+                              <div className="unit-field compact-unit-field">
+                                <input type="number" min="1" step="1" value={newPond.targetHarvestKg} onChange={(event) => setNewPond({ ...newPond, targetHarvestKg: event.target.value })} placeholder="200" required />
+                                <select value={newPond.targetHarvestUnit} onChange={(event) => setNewPond({ ...newPond, targetHarvestUnit: event.target.value as 'g' | 'kg' })}>
+                                  <option value="g">g</option>
+                                  <option value="kg">kg</option>
+                                </select>
+                              </div>
+                            </label>
+                          </div>
+
+                          <div className="worker-form-footer full-width">
+                            <small className="helper-text helper-note">Create a pond and it will appear in the registry immediately.</small>
                             <div className="modal-actions compact-actions">
                               <button type="button" className="secondary-btn" onClick={() => setShowPondCreateModal(false)}>Cancel</button>
                               <button className="primary-btn" type="submit">Create pond</button>
@@ -2080,7 +2221,7 @@ function App() {
                     </div>
                   ) : null}
                 </>
-              ) : <p className="empty-copy">Workers cannot create ponds. You only see ponds assigned to you.</p>}
+              ) : null}
               <div className="pond-grid">
                 {data.ponds.map((pond) => (
                   <button className={`pond-card pond-button ${!isOwner ? 'compact' : ''}`} key={pond.id} onClick={() => openPond(pond.id)}>
@@ -2113,22 +2254,150 @@ function App() {
                 ))}
               </div>
             </Panel>
-            <PondSummaryPanel
-              pond={selectedPond}
-              summary={selectedPondSummary}
-              isOwner={isOwner}
-              form={pondLogForm}
-              inventoryItems={data.inventoryItems}
-              onFormChange={setPondLogForm}
-              onSubmit={handleWorkerPondLogEnhanced}
-              onRecordHarvest={(harvest: any) => { setLastCreatedHarvest({ id: harvest.id, pondId: harvest.pondId, numberHarvested: harvest.numberHarvested }); setToastMessage(`${harvest.numberHarvested} fish recorded — Undo`); }}
-              onApplyRecommendedFeed={handleApplyRecommendedFeed}
-              onUpdateHarvest={handleUpdateHarvest}
-              token={token}
-              apiBaseUrl={apiBaseUrl}
-              loadData={loadData}
-              setToastMessage={setToastMessage}
-            />
+            {isOwner ? (
+              <Panel eyebrow="Admin tools" title="Quick actions">
+                <div className="admin-action-grid">
+                  <button type="button" className="admin-action-card" onClick={() => { setAdminActionModal({ type: 'targetHarvest' }); setTargetHarvestAction((current) => ({ ...current, pondId: current.pondId || selectedPondId || data.ponds[0]?.id || '' })); }}>
+                    <span>Set target harvest</span>
+                  </button>
+                  <button type="button" className="admin-action-card" onClick={() => { setAdminActionModal({ type: 'recommendFeed' }); setRecommendFeedAction((current) => ({ ...current, pondId: current.pondId || selectedPondId || data.ponds[0]?.id || '' })); }}>
+                    <span>Recommend feed</span>
+                  </button>
+                  <button type="button" className="admin-action-card" onClick={() => { setAdminActionModal({ type: 'mortality' }); setMortalityAction((current) => ({ ...current, pondId: current.pondId || selectedPondId || data.ponds[0]?.id || '' })); }}>
+                    <span>Record mortality</span>
+                  </button>
+                </div>
+              </Panel>
+            ) : null}
+            {adminActionModal ? (
+              <div className="modal-backdrop" onClick={() => setAdminActionModal(null)}>
+                <div className="modal worker-modal admin-action-modal" onClick={(event) => event.stopPropagation()}>
+                  <h3>{adminActionModal.type === 'targetHarvest' ? 'Set target harvest' : adminActionModal.type === 'recommendFeed' ? 'Recommend feed' : 'Record mortality'}</h3>
+                  {adminActionModal.type === 'targetHarvest' ? (
+                    <form className="worker-create-form" onSubmit={handleTargetHarvestActionSubmit}>
+                      <label className="worker-field full-width">
+                        <span>Available pond</span>
+                        <select value={targetHarvestAction.pondId} onChange={(event) => setTargetHarvestAction({ ...targetHarvestAction, pondId: event.target.value })} required>
+                          <option value="">Select a pond</option>
+                          {data.ponds.map((pond) => (
+                            <option key={pond.id} value={pond.id}>Pond {pond.number} · {pond.site?.name || 'Main site'}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <div className="inline-fields">
+                        <label className="worker-field">
+                          <span>Harvest date</span>
+                          <input type="date" value={targetHarvestAction.date} onChange={(event) => setTargetHarvestAction({ ...targetHarvestAction, date: event.target.value })} required />
+                        </label>
+                        <label className="worker-field">
+                          <span>Time</span>
+                          <input type="time" value={targetHarvestAction.time} onChange={(event) => setTargetHarvestAction({ ...targetHarvestAction, time: event.target.value })} required />
+                        </label>
+                      </div>
+                      <div className="modal-actions compact-actions">
+                        <button type="button" className="secondary-btn" onClick={() => setAdminActionModal(null)}>Cancel</button>
+                        <button type="submit" className="primary-btn">Set date</button>
+                      </div>
+                    </form>
+                  ) : null}
+
+                  {adminActionModal.type === 'recommendFeed' ? (
+                    <form className="worker-create-form" onSubmit={handleRecommendFeedActionSubmit}>
+                      <label className="worker-field full-width">
+                        <span>Available pond</span>
+                        <select value={recommendFeedAction.pondId} onChange={(event) => setRecommendFeedAction({ ...recommendFeedAction, pondId: event.target.value })} required>
+                          <option value="">Select a pond</option>
+                          {data.ponds.map((pond) => (
+                            <option key={pond.id} value={pond.id}>Pond {pond.number} · {pond.site?.name || 'Main site'}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="worker-field full-width">
+                        <span>Feed size</span>
+                        <select value={recommendFeedAction.feedSize} onChange={(event) => setRecommendFeedAction({ ...recommendFeedAction, feedSize: event.target.value })}>
+                          <option value="1mm">1mm</option>
+                          <option value="1.5mm">1.5mm</option>
+                          <option value="2mm">2mm</option>
+                          <option value="2.5mm">2.5mm</option>
+                          <option value="3mm">3mm</option>
+                          <option value="3.5mm">3.5mm</option>
+                          <option value="4mm">4mm</option>
+                          <option value="4.5mm">4.5mm</option>
+                        </select>
+                      </label>
+                      <label className="worker-field full-width">
+                        <span>Feed stock item</span>
+                        <select value={recommendFeedAction.inventoryItemId} onChange={(event) => setRecommendFeedAction({ ...recommendFeedAction, inventoryItemId: event.target.value })}>
+                          <option value="">Use default feed</option>
+                          {data.inventoryItems.filter((item) => item.category === 'FEED' || item.category?.toUpperCase() === 'FEED').map((item) => (
+                            <option key={item.id} value={item.id}>{item.name}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <div className="modal-actions compact-actions">
+                        <button type="button" className="secondary-btn" onClick={() => setAdminActionModal(null)}>Cancel</button>
+                        <button type="submit" className="primary-btn">Recommend</button>
+                      </div>
+                    </form>
+                  ) : null}
+
+                  {adminActionModal.type === 'mortality' ? (
+                    <form className="worker-create-form" onSubmit={handleMortalityActionSubmit}>
+                      <label className="worker-field full-width">
+                        <span>Available pond</span>
+                        <select value={mortalityAction.pondId} onChange={(event) => setMortalityAction({ ...mortalityAction, pondId: event.target.value })} required>
+                          <option value="">Select a pond</option>
+                          {data.ponds.map((pond) => (
+                            <option key={pond.id} value={pond.id}>Pond {pond.number} · {pond.site?.name || 'Main site'}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <div className="inline-fields">
+                        <label className="worker-field">
+                          <span>Mortality count</span>
+                          <input type="number" min="1" step="1" value={mortalityAction.count} onChange={(event) => setMortalityAction({ ...mortalityAction, count: event.target.value })} required />
+                        </label>
+                        <label className="worker-field">
+                          <span>Observed at</span>
+                          <input type="datetime-local" value={mortalityAction.observedAt ? new Date(mortalityAction.observedAt).toISOString().slice(0, 16) : ''} onChange={(event) => setMortalityAction({ ...mortalityAction, observedAt: event.target.value ? new Date(event.target.value).toISOString() : '' })} />
+                        </label>
+                      </div>
+                      <label className="worker-field full-width">
+                        <span>Mortality cause</span>
+                        <input value={mortalityAction.cause} onChange={(event) => setMortalityAction({ ...mortalityAction, cause: event.target.value })} placeholder="Low oxygen / disease / stress" />
+                      </label>
+                      <div className="modal-actions compact-actions">
+                        <button type="button" className="secondary-btn" onClick={() => setAdminActionModal(null)}>Cancel</button>
+                        <button type="submit" className="primary-btn">Save record</button>
+                      </div>
+                    </form>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+            {selectedPond && selectedPondSummary ? (
+              <div className="pond-modal-backdrop" onClick={() => { setSelectedPondId(null); setSelectedPond(null); setSelectedPondSummary(null); }}>
+                <div className="pond-modal-card" onClick={(event) => event.stopPropagation()}>
+                  <button type="button" className="pond-modal-close" aria-label="Close pond details" onClick={() => { setSelectedPondId(null); setSelectedPond(null); setSelectedPondSummary(null); }}>×</button>
+                  <PondSummaryPanel
+                    pond={selectedPond}
+                    summary={selectedPondSummary}
+                    isOwner={isOwner}
+                    form={pondLogForm}
+                    inventoryItems={data.inventoryItems}
+                    onFormChange={setPondLogForm}
+                    onSubmit={handleWorkerPondLogEnhanced}
+                    onRecordHarvest={(harvest: any) => { setLastCreatedHarvest({ id: harvest.id, pondId: harvest.pondId, numberHarvested: harvest.numberHarvested }); setToastMessage(`${harvest.numberHarvested} fish recorded — Undo`); }}
+                    onApplyRecommendedFeed={handleApplyRecommendedFeed}
+                    onUpdateHarvest={handleUpdateHarvest}
+                    token={token}
+                    apiBaseUrl={apiBaseUrl}
+                    loadData={loadData}
+                    setToastMessage={setToastMessage}
+                  />
+                </div>
+              </div>
+            ) : null}
 
             {isOwner && selectedPond ? (
               <Panel eyebrow="Harvest" title="Record harvest">
@@ -2586,7 +2855,8 @@ function App() {
          {recentlyDeleted ? <button type="button" className="secondary-btn" style={{ marginLeft: 12 }} onClick={() => void undoDeleteInventory()}>Undo</button> : (lastCreatedHarvest ? <button type="button" className="secondary-btn" style={{ marginLeft: 12 }} onClick={() => void undoLastHarvest()}>Undo</button> : null)}
        </div>
      ) : null}
-    </div>
+      </div>
+    </>
   );
 }
 
@@ -2659,10 +2929,9 @@ function PondSummaryPanel({
   const currentFeedSize = summary.latestFeedSize || summary.recommendedFeedSize || '4mm';
   const recommendedFeedSize = summary.recommendedFeedSize || getRecommendedFeedSize(typeof currentAvg === 'number' ? currentAvg : Number(pond.initialAvgWeightG ?? 0));
   const feedNeedsChange = currentFeedSize !== recommendedFeedSize;
+  const harvestDateValue = pond.targetHarvestDate ? new Date(pond.targetHarvestDate).toISOString().slice(0,10) : (summary.harvest ? new Date(summary.harvest.expectedHarvestDate).toISOString().slice(0,10) : '');
 
-  const [targetDate, setTargetDate] = useState<string>(
-    pond.targetHarvestDate ? new Date(pond.targetHarvestDate).toISOString().slice(0,10) : (summary.harvest ? new Date(summary.harvest.expectedHarvestDate).toISOString().slice(0,10) : '')
-  );
+  const [targetDate, setTargetDate] = useState<string>(harvestDateValue);
   const [editingHarvestId, setEditingHarvestId] = useState<string | null>(null);
   const [harvestEditForm, setHarvestEditForm] = useState({
     numberHarvested: '',
@@ -2671,6 +2940,10 @@ function PondSummaryPanel({
     method: '',
     destination: '',
   });
+
+  useEffect(() => {
+    setTargetDate(harvestDateValue);
+  }, [pond.id, harvestDateValue]);
 
   async function saveTargetDate(value: string | null) {
     if (!token || !isOwner) return setToastMessage('Not authorized');
@@ -2695,180 +2968,41 @@ function PondSummaryPanel({
 
   return (
     <Panel eyebrow={`Pond ${pond.number}`} title={isOwner ? 'Admin inspection view' : 'Worker pond update'}>
-      <div className={`pond-detail ${!isOwner ? 'worker-large' : ''}`}>
-        <Fish size={34} />
-        <div><span>Initial stock</span><strong>{initialStock} fish</strong></div>
-        <div><span>Current live</span><strong>{summary.currentLive} fish</strong></div>
-        <div><span>Total mortality</span><strong>{summary.totalMortality} fish</strong></div>
-        <div><span>Total harvested</span><strong>{summary.totalHarvested} fish</strong></div>
-        <div><span>Total feed</span><strong>{summary.totalFeedKg ?? 0} kg</strong></div>
-        <div><span>Feed size</span><strong>{currentFeedSize}</strong></div>
-        <div><span>Today feed</span><strong>{summary.todayFeedKg ?? 0} kg</strong></div>
-        <div><span>Current avg weight</span><strong>{typeof currentAvg === 'number' ? `${currentAvg} g` : currentAvg}</strong></div>
-        <div><span>Target avg weight</span><strong>{targetAvg}</strong></div>
-        <div><span>Target date</span><strong>{summary.harvest ? new Date(summary.harvest.expectedHarvestDate).toLocaleDateString() : 'Not planned'}</strong>
-          {isOwner ? (
-            <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
-              <input type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} />
-              <button type="button" className="primary-btn" onClick={() => void saveTargetDate(targetDate)}>Set</button>
-              <button type="button" className="secondary-btn" onClick={() => { setTargetDate(''); void saveTargetDate(null); }}>Clear</button>
+      <div className="pond-detail-stack">
+        <div className="pond-detail-card">
+          <div className="detail-card-header">
+            <div>
+              <span className="eyebrow">Fixed pond details</span>
+              <h3>Operational overview</h3>
             </div>
-          ) : null}
+            <Fish size={28} />
+          </div>
+          <div className={`pond-detail ${!isOwner ? 'worker-large' : ''}`}>
+            <div><span>Initial stock</span><strong>{initialStock} fish</strong></div>
+            <div><span>Current live</span><strong>{summary.currentLive} fish</strong></div>
+            <div><span>Total mortality</span><strong>{summary.totalMortality} fish</strong></div>
+            <div><span>Total feed</span><strong>{summary.totalFeedKg ?? 0} kg</strong></div>
+            <div><span>Current Feed size</span><strong>{currentFeedSize}</strong></div>
+            <div><span>Current avg weight</span><strong>{typeof currentAvg === 'number' ? `${currentAvg} g` : currentAvg}</strong></div>
+            <div><span>Growth progress</span><strong>{growthProgress !== null ? `${growthProgress}%` : 'Missing data'}</strong></div>
+            <div><span>Target avg weight</span><strong>{targetAvg}</strong></div>
+            <div className={summary.harvest?.expectedHarvestDate ? 'target-date-highlight' : ''}>
+              <span>Target harvest date</span>
+              <strong>{summary.harvest?.expectedHarvestDate ? new Date(summary.harvest.expectedHarvestDate).toLocaleDateString() : 'Not planned'}</strong>
+              {summary.harvest?.expectedHarvestDate ? <small className="target-date-alert">Harvest scheduled</small> : null}
+            </div>
+            <div><span>Total harvested</span><strong>{summary.totalHarvested} fish</strong></div>
+            {isOwner ? (
+              <div className="target-date-row"><span>Update target date</span><div className="inline-update-actions"><input type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} /><button type="button" className="primary-btn" onClick={() => void saveTargetDate(targetDate)}>Set</button><button type="button" className="secondary-btn" onClick={() => { setTargetDate(''); void saveTargetDate(null); }}>Clear</button></div></div>
+            ) : null}
+          </div>
         </div>
-        <div><span>Growth progress</span><strong>{growthProgress !== null ? `${growthProgress}%` : 'Missing data'}</strong></div>
-        <div><span>Recommended size</span><strong>{recommendedFeedSize}</strong></div>
+
       </div>
-
-      <div className="record-row priority-row" style={feedNeedsChange ? { borderLeft: '4px solid #f59e0b', background: 'rgba(245, 158, 11, 0.04)' } : { borderLeft: '4px solid #2e7d32', background: 'rgba(46, 125, 50, 0.03)' }}>
-        <div className="priority-row-main">
-          <div>
-            <strong>Feed size status</strong>
-            <span>{typeof currentAvg === 'number' ? `${currentAvg} g current average` : 'Average weight pending'}</span>
-          </div>
-          <span className={feedNeedsChange ? 'priority-label warning' : 'priority-label success'}>
-            {feedNeedsChange ? 'Priority action' : 'On target'}
-          </span>
-        </div>
-        <div className="pond-stats">
-          <span>{currentFeedSize}</span>
-          <span className={feedNeedsChange ? 'warning-chip' : 'success-chip'}>
-            {feedNeedsChange ? 'Switch to ' + recommendedFeedSize : 'Good size'}
-          </span>
-          <button
-            type="button"
-            className="secondary-btn compact-btn"
-            onClick={() => void onApplyRecommendedFeed(pond.id, recommendedFeedSize)}
-          >
-            {feedNeedsChange ? `Apply ${recommendedFeedSize}` : 'Keep this size'}
-          </button>
-        </div>
-      </div>
-
-      <section style={{ marginTop: 12 }}>
-        <h3 className="eyebrow">Feed plan</h3>
-        <div className="record-row"><strong>Latest feed size</strong><span>{summary.latestFeedSize || summary.recommendedFeedSize || 'Not recorded'}</span></div>
-        <div className="record-row"><strong>Latest feed type</strong><span>{summary.latestFeedType || 'Not recorded'}</span></div>
-        <div className="record-row"><strong>Today's feeding</strong><span>{summary.todayFeedKg ?? 0} kg</span></div>
-        <div className="record-row"><strong>Recommended size for current average</strong><span>{recommendedFeedSize}</span></div>
-      </section>
-
-      <section style={{ marginTop: 12 }}>
-        <h3 className="eyebrow">Monthly growth</h3>
-        {summary.growthHistory && summary.growthHistory.length ? (
-          <div className="record-list">
-            {summary.growthHistory.map((g: any) => (
-              <div className="stat-row" key={g.measuredAt}><strong>{new Date(g.measuredAt).toLocaleDateString()}</strong><span>{g.avgWeightGrams} g</span></div>
-            ))}
-          </div>
-        ) : (
-          <p className="empty-copy">No growth measurements recorded yet.</p>
-        )}
-      </section>
-
-      <section style={{ marginTop: 12 }}>
-        <h3 className="eyebrow">Harvest history</h3>
-        {summary.harvestHistory && summary.harvestHistory.length ? (
-          <div className="record-list">
-            {summary.harvestHistory.map((h: any) => (
-              <div className="record-row" key={h.id || h.recordedAt}>
-                {editingHarvestId === h.id ? (
-                  <form
-                    className="owner-form"
-                    onSubmit={async (event) => {
-                      event.preventDefault();
-                      await onUpdateHarvest(h.id, {
-                        numberHarvested: harvestEditForm.numberHarvested ? Number(harvestEditForm.numberHarvested) : undefined,
-                        avgWeightGrams: harvestEditForm.avgWeightGrams ? Number(harvestEditForm.avgWeightGrams) : undefined,
-                        biomassKg: harvestEditForm.biomassKg ? Number(harvestEditForm.biomassKg) : undefined,
-                        method: harvestEditForm.method || undefined,
-                        destination: harvestEditForm.destination || undefined,
-                      });
-                      setEditingHarvestId(null);
-                    }}
-                    style={{ width: '100%' }}
-                  >
-                    <input
-                      placeholder="Quantity"
-                      value={harvestEditForm.numberHarvested}
-                      onChange={(event) => setHarvestEditForm({ ...harvestEditForm, numberHarvested: event.target.value })}
-                    />
-                    <input
-                      placeholder="Avg weight (g)"
-                      value={harvestEditForm.avgWeightGrams}
-                      onChange={(event) => setHarvestEditForm({ ...harvestEditForm, avgWeightGrams: event.target.value })}
-                    />
-                    <input
-                      placeholder="Biomass (kg)"
-                      value={harvestEditForm.biomassKg}
-                      onChange={(event) => setHarvestEditForm({ ...harvestEditForm, biomassKg: event.target.value })}
-                    />
-                    <input
-                      placeholder="Method"
-                      value={harvestEditForm.method}
-                      onChange={(event) => setHarvestEditForm({ ...harvestEditForm, method: event.target.value })}
-                    />
-                    <input
-                      placeholder="Destination"
-                      value={harvestEditForm.destination}
-                      onChange={(event) => setHarvestEditForm({ ...harvestEditForm, destination: event.target.value })}
-                    />
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <button type="submit" className="primary-btn">Save</button>
-                      <button type="button" className="secondary-btn" onClick={() => setEditingHarvestId(null)}>Cancel</button>
-                    </div>
-                  </form>
-                ) : (
-                  <>
-                    <div>
-                      <strong>{new Date(h.recordedAt).toLocaleDateString()}</strong>
-                      <span>{h.numberHarvested} fish</span>
-                    </div>
-                    <div className="pond-stats">
-                      <span>{h.avgWeightGrams ? `${h.avgWeightGrams} g` : '-'}</span>
-                      <span>{h.biomassKg ? `${h.biomassKg} kg` : '-'}</span>
-                      <button
-                        type="button"
-                        className="secondary-btn compact-btn"
-                        onClick={() => {
-                          setEditingHarvestId(h.id);
-                          setHarvestEditForm({
-                            numberHarvested: String(h.numberHarvested || ''),
-                            avgWeightGrams: h.avgWeightGrams ? String(h.avgWeightGrams) : '',
-                            biomassKg: h.biomassKg ? String(h.biomassKg) : '',
-                            method: h.method || '',
-                            destination: h.destination || '',
-                          });
-                        }}
-                      >
-                        Edit
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-            ))}
-            <div className="stat-row"><strong>Total harvested</strong><span>{summary.totalHarvested} fish</span></div>
-            <div className="stat-row"><strong>Remaining</strong><span>{summary.currentLive} fish</span></div>
-          </div>
-        ) : (
-          <p className="empty-copy">No harvests recorded yet.</p>
-        )}
-      </section>
-
-      <section style={{ marginTop: 12 }}>
-        <h3 className="eyebrow">Latest health</h3>
-        <div className="record-row"><strong>Fish behavior</strong><span>{summary.behavior || 'Not recorded'}</span></div>
-        <div className="record-row"><strong>Feed response</strong><span>{summary.reactive === null ? 'Not recorded' : summary.reactive ? 'Good' : 'Poor'}</span></div>
-        <div className="record-row"><strong>Mortality today</strong><span>{summary.todayMortality || 0}</span></div>
-        <div className="record-row"><strong>pH</strong><span>{summary.ph ?? 'Not recorded'}</span></div>
-        <div className="record-row"><strong>Water status</strong><span>{summary.waterIssue ? 'Needs review' : 'Normal'}</span></div>
-      </section>
-
-      <div style={{ marginTop: 12 }} className="record-row"><strong>Last updated</strong><span>{summary.lastUpdatedAt ? new Date(summary.lastUpdatedAt).toLocaleString() : 'No recent update'}</span></div>
 
       {!isOwner ? (
         <form className="worker-log-form" onSubmit={onSubmit}>
-          <select value={form.feedSize || '4mm'} onChange={(event) => onFormChange({ ...form, feedSize: event.target.value })}>
+          <select value={form.feedSize || currentFeedSize} onChange={(event) => onFormChange({ ...form, feedSize: event.target.value })} disabled={Boolean(summary.recommendedFeedSize || summary.latestFeedSize)}>
             <option value="1mm">1mm</option>
             <option value="1.5mm">1.5mm</option>
             <option value="2mm">2mm</option>
@@ -2902,8 +3036,6 @@ function PondSummaryPanel({
           <input placeholder="Mortality cause" value={form.mortalityCause} onChange={(event) => onFormChange({ ...form, mortalityCause: event.target.value })} />
           <input type="number" min="0" step="1" placeholder="Average weight (g)" value={form.avgWeightGrams} onChange={(event) => onFormChange({ ...form, avgWeightGrams: event.target.value })} />
           <input placeholder="Growth note" value={form.growthComment} onChange={(event) => onFormChange({ ...form, growthComment: event.target.value })} />
-
-
           <textarea placeholder="Water or behavior note" value={form.waterComment} onChange={(event) => onFormChange({ ...form, waterComment: event.target.value })} />
           <button className="primary-btn" type="submit"><Upload size={16} />Submit pond update</button>
         </form>
