@@ -4,7 +4,7 @@ import { prisma } from '../lib/prisma';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { JWT_SECRET } from '../config';
-import { addRuntimeUser, getFallbackUserByCredentials, listRuntimeUsers } from '../lib/devUsers';
+import { addRuntimeUser, getFallbackUserByCredentials, listRuntimeUsers, runtimeUsers } from '../lib/devUsers';
 
 const DEFAULT_ADMIN_CODE = process.env.SEED_OWNER_CODE || process.env.SEED_ADMIN_CODE || 'ADMIN2024';
 const LEGACY_ADMIN_CODES = new Set([DEFAULT_ADMIN_CODE, 'OWNER2024', 'ADMIN2024']);
@@ -443,5 +443,34 @@ export async function updateWorkerAccess(req: Request, res: Response) {
       createdAt: updatedWorker.createdAt,
     },
   });
+}
+
+export async function deleteWorker(req: Request, res: Response) {
+  const ownerId = (req as any).userId;
+  const workerId = req.params.id;
+
+  if (!ownerId) return res.status(401).json({ error: 'Unauthorized' });
+  if (!workerId) return res.status(400).json({ error: 'Worker ID is required' });
+
+  const runtimeOwner = listRuntimeUsers().find((user) => user.id === ownerId && user.role === 'OWNER');
+  const owner = await prisma.user.findUnique({ where: { id: ownerId }, include: { role: true } }).catch(() => null);
+  if ((!owner || owner.role.name !== 'OWNER') && !runtimeOwner) {
+    return res.status(403).json({ error: 'Only OWNER can delete workers' });
+  }
+
+  const runtimeWorker = listRuntimeUsers().find((user) => user.id === workerId && user.role === 'WORKER');
+  if (runtimeWorker) {
+    runtimeUsers.delete(runtimeWorker.id);
+    runtimeUsers.delete(runtimeWorker.email.toLowerCase());
+    return res.json({ success: true, deleted: { id: runtimeWorker.id, email: runtimeWorker.email } });
+  }
+
+  const worker = await prisma.user.findUnique({ where: { id: workerId }, include: { role: true } }).catch(() => null);
+  if (!worker || worker.role.name !== 'WORKER') {
+    return res.status(404).json({ error: 'Worker not found' });
+  }
+
+  await prisma.user.delete({ where: { id: workerId } }).catch(() => null);
+  return res.json({ success: true, deleted: { id: worker.id, email: worker.email } });
 }
 

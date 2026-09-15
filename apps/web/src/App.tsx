@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, useRef, type ReactNode } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -21,6 +21,7 @@ import {
   Wallet,
 } from 'lucide-react';
 import { hasPermission } from './lib/permissions';
+import { createPortal } from 'react-dom';
 import { AuthShell } from './components/AuthShell';
 
 type CurrentUser = {
@@ -59,7 +60,7 @@ const emptyState: ApiState = {
 };
 
 const ownerNav = [
-  { id: 'command', label: 'Admin Dashboard', icon: Activity },
+  { id: 'command', label: "Today's Analytics", icon: Activity },
   { id: 'ponds', label: 'Ponds', icon: Fish },
   { id: 'tasks', label: 'Tasks', icon: ClipboardList },
   { id: 'workers', label: 'Workers', icon: Users },
@@ -68,7 +69,7 @@ const ownerNav = [
 ];
 
 const workerNav = [
-  { id: 'command', label: "Today's Work", icon: ClipboardList },
+  { id: 'command', label: "Today's Analytics", icon: ClipboardList },
   { id: 'ponds', label: 'My Ponds', icon: Fish },
   { id: 'tasks', label: 'Tasks', icon: ClipboardList },
 ];
@@ -142,6 +143,93 @@ function App() {
   const [workerForm, setWorkerForm] = useState({ fullName: '', email: '', password: '' });
   const [activeNav, setActiveNav] = useState('command');
   const [sidebarOpen, setSidebarOpen] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth > 1120));
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
+  const [changePasswordSubmitting, setChangePasswordSubmitting] = useState(false);
+  const [changePasswordForm, setChangePasswordForm] = useState({ current: '', next: '', confirm: '' });
+  const inactivityTimerRef = useRef<number | null>(null);
+  const touchListeningRef = useRef(false);
+  const MOBILE_HIDE_BREAKPOINT = 900; // px
+
+  // auto-hide sidebar on small screens after period of inactivity
+  useEffect(() => {
+    function closeInventoryContext(event: Event) {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest('.inventory-card') || target.closest('.inventory-context-action')) return;
+      setInventoryContextId(null);
+    }
+
+    document.addEventListener('pointerdown', closeInventoryContext);
+    return () => document.removeEventListener('pointerdown', closeInventoryContext);
+  }, []);
+
+  useEffect(() => {
+    function clearTimer() {
+      if (inactivityTimerRef.current) {
+        window.clearTimeout(inactivityTimerRef.current);
+        inactivityTimerRef.current = null;
+      }
+    }
+
+    function startAutoHideTimer() {
+      clearTimer();
+      if (window.innerWidth <= MOBILE_HIDE_BREAKPOINT && sidebarOpen) {
+        inactivityTimerRef.current = window.setTimeout(() => {
+          setSidebarOpen(false);
+          inactivityTimerRef.current = null;
+        }, 5000);
+      }
+    }
+
+    function onTouchStart(e: TouchEvent) {
+      // if touch is outside sidebar, hide it (mobile behavior)
+      const sidebarEl = document.querySelector('.sidebar');
+      const profileEl = document.querySelector('.profile-card');
+      const targetNode = e.target as Node;
+      if (window.innerWidth <= MOBILE_HIDE_BREAKPOINT && sidebarEl && !sidebarEl.contains(targetNode)) {
+        setSidebarOpen(false);
+      }
+      // close profile panel when touching outside it
+      if (profileOpen && profileEl && !profileEl.contains(targetNode)) {
+        setProfileOpen(false);
+      }
+      // any touch interaction resets the auto-hide timer
+      startAutoHideTimer();
+    }
+
+    function onPointerDown(e: PointerEvent) {
+      // generic pointer handler: close profile/sidebar when clicking/tapping outside
+      const sidebarEl = document.querySelector('.sidebar');
+      const profileEl = document.querySelector('.profile-card');
+      const targetNode = e.target as Node;
+      if (window.innerWidth <= MOBILE_HIDE_BREAKPOINT && sidebarEl && !sidebarEl.contains(targetNode)) {
+        setSidebarOpen(false);
+      }
+      if (profileOpen && profileEl && !profileEl.contains(targetNode)) {
+        setProfileOpen(false);
+      }
+      // reset auto-hide timer
+      startAutoHideTimer();
+    }
+
+    if (typeof window !== 'undefined' && !touchListeningRef.current) {
+      document.addEventListener('touchstart', onTouchStart, { passive: true });
+      // also watch pointerdown to catch mouse and stylus interactions
+      document.addEventListener('pointerdown', onPointerDown as EventListener);
+      touchListeningRef.current = true;
+      startAutoHideTimer();
+    }
+
+    return () => {
+      clearTimer();
+      if (touchListeningRef.current) {
+        document.removeEventListener('touchstart', onTouchStart as EventListener);
+        document.removeEventListener('pointerdown', onPointerDown as EventListener);
+        touchListeningRef.current = false;
+      }
+    };
+  }, [sidebarOpen, profileOpen]);
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<ApiState>(emptyState);
   const [fieldNote, setFieldNote] = useState('Fed Pond 3. Fish appetite was strong. No dead fish. Water level normal.');
@@ -160,8 +248,14 @@ function App() {
   const [workerSearchTerm, setWorkerSearchTerm] = useState('');
   const [workerStatusFilter, setWorkerStatusFilter] = useState<'all' | 'active' | 'blocked'>('all');
   const [showWorkerCreateModal, setShowWorkerCreateModal] = useState(false);
+  const [revealedSwipeAction, setRevealedSwipeAction] = useState<{ type: 'finance' | 'worker' | 'inventory' | 'task' | 'pond'; id: string } | null>(null);
+  const swipeDragRef = useRef<{ type: 'finance' | 'worker' | 'inventory' | 'task' | 'pond'; id: string; startX: number; moved: boolean } | null>(null);
+  const swipeGuardRef = useRef(false);
+  const [adminPondQuickUpdateId, setAdminPondQuickUpdateId] = useState('');
   const [expandedWorkerId, setExpandedWorkerId] = useState<string | null>(null);
   const [workerPasswords, setWorkerPasswords] = useState<Record<string, string>>({});
+  const [inventoryContextId, setInventoryContextId] = useState<string | null>(null);
+  const inventoryLongPressTimerRef = useRef<number | null>(null);
 
   // Owner harvest recording UI state
   const [showHarvestForm, setShowHarvestForm] = useState(false);
@@ -225,6 +319,19 @@ function App() {
       setPondLogForm((current) => ({ ...current, feedSize: recommended }));
     }
   }, [selectedPond, selectedPondSummary, getRecommendedFeedSize, pondLogForm.feedGrams, pondLogForm.feedKg, pondLogForm.feedSize]);
+
+  useEffect(() => {
+    function handleInventoryContextDismiss(event: PointerEvent) {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (!inventoryContextId) return;
+      if (target.closest('.inventory-card') || target.closest('.inventory-context-action')) return;
+      setInventoryContextId(null);
+    }
+
+    document.addEventListener('pointerdown', handleInventoryContextDismiss);
+    return () => document.removeEventListener('pointerdown', handleInventoryContextDismiss);
+  }, [inventoryContextId]);
 
   // lightweight modal helper for harvest confirmation (awaitable)
   const [harvestModal, setHarvestModal] = useState<{ open: boolean; details?: any; resolver?: ((v: boolean) => void) | null }>({ open: false, details: undefined, resolver: null });
@@ -298,6 +405,8 @@ function App() {
   const canViewFinance = hasPermission(currentUser?.role, 'FINANCE_VIEW');
   const canViewInventory = hasPermission(currentUser?.role, 'INVENTORY_VIEW');
   const navItems = isOwner ? ownerNav : workerNav;
+  const [selectedAnalyticsMetric, setSelectedAnalyticsMetric] = useState<'health' | 'feed' | 'mortality' | 'profit' | 'ponds'>('health');
+  const [selectedAnalyticsRange, setSelectedAnalyticsRange] = useState<'daily' | 'weekly' | 'monthly' | 'yearly'>('daily');
 
   const readQueuedSyncEntries = useCallback(() => {
     if (typeof window === 'undefined') return [] as Array<Record<string, any>>;
@@ -668,12 +777,20 @@ function App() {
       }
     });
 
-    const deduped = Array.from(uniqueByKey.values()).map((worker) => ({
-      ...worker,
-      password: worker.password || workerPasswords[worker.id || worker.email] || 'Assigned password',
-    }));
+    const deduped = Array.from(uniqueByKey.values())
+      .filter((worker) => {
+        const name = String(worker.name || worker.email || '').trim();
+        const email = String(worker.email || '').trim().toLowerCase();
+        return !/field worker/i.test(name) && !/field worker/i.test(email) && !/worker@aquaculture\.localapp/i.test(email);
+      })
+      .map((worker) => ({
+        ...worker,
+        password: worker.password || workerPasswords[worker.id || worker.email] || 'Assigned password',
+      }));
+
     return deduped.length > 0 ? deduped : [
-      { id: 'worker-dev', email: 'worker@aquaculture.localapp', name: 'Field Worker', role: { name: 'WORKER' }, blocked: false, createdAt: new Date().toISOString(), password: 'Assigned password' },
+      { id: 'yunusa-worker', email: 'yunusa@aquaculture.localapp', name: 'Yunusa', role: { name: 'WORKER' }, blocked: false, createdAt: new Date().toISOString(), password: 'Assigned password' },
+      { id: 'kebba-worker', email: 'kebba@aquaculture.localapp', name: 'Kebba', role: { name: 'WORKER' }, blocked: false, createdAt: new Date().toISOString(), password: 'Assigned password' },
     ];
   }, [data.farms, workerPasswords, workerRoster]);
 
@@ -701,6 +818,148 @@ function App() {
     const finance = data.finance || { income: 0, expenses: 0, budget: 0, profit: 0, status: 'PROFIT', profitMargin: 0, budgetUsedPercent: 0 };
     return { totalFeed, totalMortality, lowStock, finance, healthScore: totalMortality > 10 ? 82 : 96, latestFeedSize };
   }, [data]);
+
+  const getBarTone = (value: number) => {
+    if (selectedAnalyticsMetric === 'health') {
+      if (value >= 80) return '#22c55e';
+      if (value >= 60) return '#3b82f6';
+      return '#ef4444';
+    }
+    if (selectedAnalyticsMetric === 'mortality') {
+      if (value >= 12) return '#ef4444';
+      if (value >= 5) return '#f59e0b';
+      return '#22c55e';
+    }
+    if (selectedAnalyticsMetric === 'feed') {
+      if (value >= 60) return '#3b82f6';
+      if (value >= 25) return '#22c55e';
+      return '#f59e0b';
+    }
+    if (selectedAnalyticsMetric === 'profit') {
+      return value >= 0 ? '#22c55e' : '#ef4444';
+    }
+    return value >= 0 ? '#22c55e' : '#ef4444';
+  };
+
+  const analyticsSeries = useMemo(() => {
+    const metricKeys = ['health', 'feed', 'mortality', 'profit', 'ponds'] as const;
+    const metricLabelMap: Record<(typeof metricKeys)[number], string> = {
+      health: 'Farm health',
+      feed: 'Feed logged',
+      mortality: 'Mortality',
+      profit: 'Net position',
+      ponds: isOwner ? 'Admin overview' : 'My ponds',
+    };
+
+    const rangeLength = selectedAnalyticsRange === 'daily' ? 7 : selectedAnalyticsRange === 'weekly' ? 6 : selectedAnalyticsRange === 'monthly' ? 6 : 12;
+    const now = new Date();
+    const buckets = Array.from({ length: rangeLength }, (_, index) => {
+      const current = new Date(now);
+      if (selectedAnalyticsRange === 'daily') {
+        current.setDate(now.getDate() - (rangeLength - 1 - index));
+      } else if (selectedAnalyticsRange === 'weekly') {
+        current.setDate(now.getDate() - ((rangeLength - 1 - index) * 7));
+      } else if (selectedAnalyticsRange === 'monthly') {
+        current.setMonth(now.getMonth() - (rangeLength - 1 - index));
+      } else {
+        current.setMonth(now.getMonth() - (rangeLength - 1 - index));
+      }
+
+      const label = selectedAnalyticsRange === 'daily'
+        ? current.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+        : selectedAnalyticsRange === 'weekly'
+          ? `W${Math.max(1, Math.ceil((current.getDate() + current.getMonth() * 30) / 7))}`
+          : selectedAnalyticsRange === 'monthly'
+            ? current.toLocaleDateString(undefined, { month: 'short' })
+            : current.toLocaleDateString(undefined, { month: 'short' });
+
+      return { label, value: 0, date: new Date(current.getFullYear(), current.getMonth(), current.getDate()) };
+    });
+
+    const bucketIndexFor = (value: Date) => {
+      if (selectedAnalyticsRange === 'daily') {
+        return buckets.findIndex((bucket) => bucket.date.toDateString() === value.toDateString());
+      }
+      if (selectedAnalyticsRange === 'weekly') {
+        const diffDays = Math.floor((now.getTime() - value.getTime()) / 86400000);
+        return Math.min(rangeLength - 1, Math.max(0, Math.floor(diffDays / 7)));
+      }
+      if (selectedAnalyticsRange === 'monthly') {
+        return Math.min(rangeLength - 1, Math.max(0, (now.getFullYear() - value.getFullYear()) * 12 + (now.getMonth() - value.getMonth())));
+      }
+      return Math.min(rangeLength - 1, Math.max(0, (now.getFullYear() - value.getFullYear()) * 12 + (now.getMonth() - value.getMonth())));
+    };
+
+    const addValue = (dateValue: Date | string | undefined, amount: number) => {
+      if (!dateValue) return;
+      const recordDate = new Date(dateValue);
+      if (Number.isNaN(recordDate.getTime())) return;
+      const bucketIndex = bucketIndexFor(recordDate);
+      if (bucketIndex >= 0 && bucketIndex < buckets.length) {
+        buckets[bucketIndex].value += Number(amount) || 0;
+      }
+    };
+
+    data.feedings.forEach((item) => addValue(item.createdAt, Number(item.quantityKg || 0)));
+    data.mortalityLogs.forEach((item) => addValue(item.createdAt, Number(item.numberDead || 0)));
+    data.financeRecords.forEach((item) => {
+      if (item.type === 'INCOME') addValue(item.recordedAt, Number(item.amount || 0));
+      if (item.type === 'EXPENSE') addValue(item.recordedAt, -Number(item.amount || 0));
+      if (item.type === 'BUDGET') addValue(item.recordedAt, 0);
+    });
+    data.ponds.forEach((pond) => addValue(pond.stockedAt || pond.createdAt, 1));
+    data.tasks.forEach((task) => addValue(task.createdAt || task.dueAt, 1));
+
+    const selectedMetric = selectedAnalyticsMetric;
+    const normalized = buckets.map((bucket) => {
+      let value = bucket.value;
+      if (selectedMetric === 'health') {
+        const mortality = data.mortalityLogs.filter((item) => {
+          const recordDate = new Date(item.createdAt || 0);
+          return selectedAnalyticsRange === 'daily' ? recordDate.toDateString() === bucket.date.toDateString() :
+            recordDate.getMonth() === bucket.date.getMonth() && recordDate.getFullYear() === bucket.date.getFullYear();
+        }).reduce((sum, item) => sum + Number(item.numberDead || 0), 0);
+        const feed = data.feedings.filter((item) => {
+          const recordDate = new Date(item.createdAt || 0);
+          return selectedAnalyticsRange === 'daily' ? recordDate.toDateString() === bucket.date.toDateString() :
+            recordDate.getMonth() === bucket.date.getMonth() && recordDate.getFullYear() === bucket.date.getFullYear();
+        }).reduce((sum, item) => sum + Number(item.quantityKg || 0), 0);
+        value = Math.max(50, Math.min(100, 100 - (mortality * 4) + Math.min(feed, 30)));
+      }
+      if (selectedMetric === 'feed') {
+        value = Math.max(0, value);
+      }
+      if (selectedMetric === 'mortality') {
+        value = Math.max(0, value);
+      }
+      if (selectedMetric === 'profit') {
+        value = Number(value.toFixed(2));
+      }
+      if (selectedMetric === 'ponds') {
+        const count = data.ponds.filter((pond) => {
+          const recordDate = new Date(pond.stockedAt || pond.createdAt || 0);
+          return selectedAnalyticsRange === 'daily' ? recordDate.toDateString() === bucket.date.toDateString() :
+            recordDate.getMonth() === bucket.date.getMonth() && recordDate.getFullYear() === bucket.date.getFullYear();
+        }).length + data.tasks.filter((task) => {
+          const recordDate = new Date(task.createdAt || task.dueAt || 0);
+          return selectedAnalyticsRange === 'daily' ? recordDate.toDateString() === bucket.date.toDateString() :
+            recordDate.getMonth() === bucket.date.getMonth() && recordDate.getFullYear() === bucket.date.getFullYear();
+        }).length;
+        value = count || Math.min(4, Math.max(1, Math.round((Math.abs(value) || 1) / 2)));
+      }
+      return { ...bucket, value };
+    });
+
+    const maxValue = Math.max(...normalized.map((item) => Math.abs(item.value)), 1);
+    return {
+      title: metricLabelMap[selectedMetric],
+      rangeLabel: selectedAnalyticsRange === 'daily' ? 'Daily' : selectedAnalyticsRange === 'weekly' ? 'Weekly' : selectedAnalyticsRange === 'monthly' ? 'Monthly' : 'Yearly',
+      points: normalized.map((item) => ({
+        ...item,
+        height: Math.min(52, Math.max(10, (Math.abs(item.value) / maxValue) * 52)),
+      })),
+    };
+  }, [data, isOwner, selectedAnalyticsMetric, selectedAnalyticsRange]);
 
 
   async function handleLogin(event: React.FormEvent<HTMLFormElement>) {
@@ -1036,12 +1295,12 @@ function App() {
     await loadData();
   }
 
-  const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; type: 'pond' | 'finance' | 'inventory' | null; id?: string; label?: string }>({ open: false, type: null });
+  const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; type: 'pond' | 'finance' | 'inventory' | 'worker' | 'task' | null; id?: string; label?: string }>({ open: false, type: null });
   const [taskComment, setTaskComment] = useState('');
   const [recentlyDeleted, setRecentlyDeleted] = useState<{ item: any; timeoutId?: number } | null>(null);
   const [pendingFinanceDelete, setPendingFinanceDelete] = useState<{ item: any; timeoutId?: number } | null>(null);
 
-  function showDeleteConfirmation(type: 'pond' | 'finance' | 'inventory', id: string, label: string) {
+  function showDeleteConfirmation(type: 'pond' | 'finance' | 'inventory' | 'worker' | 'task', id: string, label: string) {
     setDeleteConfirm({ open: true, type, id, label });
   }
 
@@ -1163,6 +1422,25 @@ function App() {
       setToastMessage('Unable to delete item');
     }
     cancelDeleteConfirmation();
+  }
+
+  async function deleteTask(taskId: string) {
+    if (!token || !isOwner) return;
+    const response = await fetch(`${apiBaseUrl}/tasks/${taskId}`, {
+      method: 'DELETE',
+      headers: { Authorization: token ? 'Bearer ' + token : '' },
+    });
+    if (!response.ok) {
+      const bodyText = await response.text().catch(() => '');
+      let parsed; try { parsed = JSON.parse(bodyText || '{}'); } catch { parsed = { error: bodyText || response.statusText }; }
+      setToastMessage(parsed.error || parsed.message || `Server error ${response.status}`);
+      cancelDeleteConfirmation();
+      return;
+    }
+    setToastMessage('Task deleted');
+    setRevealedSwipeAction(null);
+    setDeleteConfirm({ open: false, type: null, id: undefined, label: undefined });
+    await loadData();
   }
 
   async function undoDeleteInventory() {
@@ -1529,6 +1807,63 @@ function App() {
     await loadWorkerRoster();
   }
 
+  async function handleDeleteWorker(workerId: string) {
+    if (!token || !isOwner || !workerId) return;
+
+    const response = await fetch(`${apiBaseUrl}/auth/workers/${workerId}`, {
+      method: 'DELETE',
+      headers: { Authorization: token ? 'Bearer ' + token : '' },
+    });
+
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setToastMessage(body.error || 'Unable to delete worker');
+      return;
+    }
+
+    setDeleteConfirm({ open: false, type: null, id: undefined, label: undefined });
+    setToastMessage('Worker deleted');
+    setRevealedSwipeAction(null);
+    setWorkerRoster((current) => current.filter((worker) => worker.id !== workerId));
+    await loadWorkerRoster();
+  }
+
+  function beginSwipeReveal(type: 'finance' | 'worker' | 'inventory' | 'task' | 'pond', id: string, event: React.PointerEvent<HTMLElement>) {
+    const clientX = event.clientX;
+    swipeGuardRef.current = false;
+    swipeDragRef.current = { type, id, startX: clientX, moved: false };
+  }
+
+  function moveSwipeReveal(type: 'finance' | 'worker' | 'inventory' | 'task' | 'pond', id: string, event: React.PointerEvent<HTMLElement>) {
+    const drag = swipeDragRef.current;
+    if (!drag || drag.type !== type || drag.id !== id) return;
+
+    const deltaX = event.clientX - drag.startX;
+    if (deltaX < -28) {
+      drag.moved = true;
+      swipeGuardRef.current = true;
+      setRevealedSwipeAction({ type, id });
+    } else if (deltaX > 28 && revealedSwipeAction?.type === type && revealedSwipeAction.id === id) {
+      setRevealedSwipeAction(null);
+    }
+  }
+
+  function endSwipeReveal() {
+    swipeDragRef.current = null;
+    if (swipeGuardRef.current) {
+      window.setTimeout(() => {
+        swipeGuardRef.current = false;
+      }, 0);
+    }
+  }
+
+  function clearInventoryLongPress() {
+    if (inventoryLongPressTimerRef.current) {
+      window.clearTimeout(inventoryLongPressTimerRef.current);
+      inventoryLongPressTimerRef.current = null;
+    }
+  }
+
   async function handleCreateTask(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!token || !isOwner || !taskForm.assigneeId) return;
@@ -1822,15 +2157,92 @@ function App() {
   }
 
   const overlayVisible = notificationsOpen || syncQueueOpen;
+  const dashboardOverlayOpen = notificationsOpen || syncQueueOpen;
+  const showRecentUpdatesPanel = !dashboardOverlayOpen;
 
   return (
     <>
-      {overlayVisible ? (
-        <div className="global-veil visible" onClick={() => { setNotificationsOpen(false); setSyncQueueOpen(false); }} />
-      ) : (
-        <div className="global-veil" />
+      {typeof document !== 'undefined' && (
+        createPortal(
+          overlayVisible ? (
+            <div className="global-veil visible" onClick={() => { setNotificationsOpen(false); setSyncQueueOpen(false); }} />
+          ) : (
+            <div className="global-veil" />
+          ),
+          document.body
+        )
       )}
-      <div className={`app-shell ${sidebarOpen ? 'sidebar-open' : 'sidebar-closed'} ${overlayVisible ? 'overlay-open' : ''}`}>
+
+      {typeof document !== 'undefined' && notificationsOpen ? (
+        createPortal(
+          <div className="notification-panel" role="dialog" aria-modal="true">
+            <div className="notification-panel-header">
+              <strong>Notifications</strong>
+              <button type="button" className="secondary-btn" onClick={async () => { setNotificationsOpen(false); await markAllNotificationsRead(); }}>Close</button>
+            </div>
+            {data.notifications.length === 0 ? (
+              <p className="empty-copy">No notifications yet.</p>
+            ) : (
+              <div className="notification-list">
+                {data.notifications.map((item) => (
+                  <button
+                    type="button"
+                    key={item.id}
+                    className={item.read ? 'notification-item read' : 'notification-item unread'}
+                    onClick={async () => {
+                      await markNotificationRead(item.id);
+                      if (item.meta?.pondId) {
+                        setActiveNav('ponds');
+                        await openPond(item.meta.pondId);
+                      }
+                      setNotificationsOpen(false);
+                    }}
+                  >
+                    <div>
+                      <strong>{item.title}</strong>
+                      <span>{item.body || 'No details'}</span>
+                    </div>
+                    <small>{new Date(item.createdAt).toLocaleString()}</small>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>,
+          document.body
+        )
+      ) : null}
+
+      {typeof document !== 'undefined' && syncQueueOpen ? (
+       createPortal(
+         <div className="sync-panel" role="dialog" aria-modal="true">
+           <div className="notification-panel-header">
+             <strong>Sync queue</strong>
+             <button type="button" className="secondary-btn" onClick={() => setSyncQueueOpen(false)}>Close</button>
+           </div>
+           <div className="sync-panel-body">
+             {(() => {
+               const entries = readQueuedSyncEntries();
+               if (!entries.length) return <p className="empty-copy">No pending actions right now.</p>;
+               return entries.slice(0, 8).map((item: Record<string, any>) => (
+                 <div key={item.id} className="sync-item">
+                   <strong>{item.action}</strong>
+                   <span>{item.tableName}</span>
+                   <small>{new Date(item.createdAt).toLocaleString()}</small>
+                 </div>
+               ));
+             })()}
+           </div>
+           <div className="modal-actions compact-actions">
+             <button type="button" className="secondary-btn" onClick={() => setSyncQueueOpen(false)}>Close</button>
+             <button type="button" className="primary-btn" onClick={async () => { setSyncQueueOpen(false); if (navigator.onLine) { await flushOfflineSyncQueue(); } else { setToastMessage('You are offline. Actions will sync automatically when online again.'); } }}>
+               {isOnline ? 'Sync now' : 'Queue waiting'}
+             </button>
+           </div>
+         </div>,
+         document.body
+       )
+      ) : null}
+
       {harvestModal.open ? (
         <div className="modal-backdrop">
           <div className="modal modal-md">
@@ -1857,9 +2269,13 @@ function App() {
                   void deletePond(deleteConfirm.id);
                 } else if (deleteConfirm.type === 'finance') {
                   void deleteFinanceRecord(deleteConfirm.id);
-                              } else if (deleteConfirm.type === 'inventory') {
-                                void deleteInventoryItem(deleteConfirm.id);
-                              }
+                } else if (deleteConfirm.type === 'inventory') {
+                  void deleteInventoryItem(deleteConfirm.id);
+                } else if (deleteConfirm.type === 'worker') {
+                  void handleDeleteWorker(deleteConfirm.id);
+                } else if (deleteConfirm.type === 'task') {
+                  void deleteTask(deleteConfirm.id);
+                }
               }}>Confirm</button>
             </div>
           </div>
@@ -1926,6 +2342,7 @@ function App() {
           </div>
         </div>
       ) : null}
+      <div className={`app-shell ${sidebarOpen ? 'sidebar-open' : 'sidebar-closed'} ${overlayVisible ? 'overlay-open' : ''} ${profileOpen ? 'profile-open' : ''}`}>
       <button
         type="button"
         className="mobile-menu-btn"
@@ -1937,7 +2354,9 @@ function App() {
 
       <aside className={sidebarOpen ? 'sidebar open' : 'sidebar'}>
       <div className="brand-lockup">
-        <span className="brand-mark">AS</span>
+        <button className="brand-mark profile-btn" aria-label="Profile" onClick={(e) => { e.stopPropagation(); setProfileOpen((v) => !v); }}>
+          {(currentUser?.name || 'AS').split(' ').map((p) => p.charAt(0)).slice(0,2).join('').toUpperCase()}
+        </button>
         <div>
           <p className="eyebrow">{isOwner ? 'Admin control' : 'Field work'}</p>
           <h2>AquaCulture</h2>
@@ -1960,17 +2379,149 @@ function App() {
         </div>
       </aside>
 
+      {/* profile panel portal */}
+      {typeof document !== 'undefined' && profileOpen ? (
+        createPortal(
+          <div className="profile-panel" role="dialog" aria-modal="false" onClick={() => setProfileOpen(false)}>
+            <div className="profile-card" onClick={(e) => e.stopPropagation()}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+       <div className="brand-mark" style={{ width: 56, height: 56, borderRadius: 12, display: 'grid', placeItems: 'center' }}>{(currentUser?.name || 'AS').split(' ').map((p) => p.charAt(0)).slice(0,2).join('').toUpperCase()}</div>
+       <div>
+         <strong>{currentUser?.name || currentUser?.email || 'User'}</strong>
+         <div style={{ color: 'var(--muted)', fontSize: 13 }}>{currentUser?.email}</div>
+       </div>
+              </div>
+
+              <div style={{ marginTop: 12, display: 'grid', gap: 8 }}>
+       <button className="secondary-btn" onClick={() => { setChangePasswordOpen(true); setProfileOpen(false); }}>Change password</button>
+       <button className="secondary-btn" onClick={() => {
+         localStorage.removeItem('aquaculture-token');
+         localStorage.removeItem('aquaculture-user');
+         localStorage.removeItem('aquaculture-sync-queue');
+         setToken(null);
+         setCurrentUser(null);
+         setEmail('');
+         setPassword('');
+         setError('');
+         setShowRegisterForm(false);
+       }}>Logout</button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )
+      ) : null}
+
+      {/* change password modal */}
+      {changePasswordOpen ? (
+        <div className="modal-backdrop" onClick={() => setChangePasswordOpen(false)}>
+          <div className="modal modal-sm" onClick={(e) => e.stopPropagation()}>
+            <h3>Change password</h3>
+            <form onSubmit={async (e) => {
+              e.preventDefault();
+              if (changePasswordSubmitting) return;
+
+              const current = changePasswordForm.current.trim();
+              const next = changePasswordForm.next.trim();
+              if (!current || current.length === 0) { setToastMessage('Enter your current password'); return; }
+              if (!next || next.length < 8) { setToastMessage('Enter a strong password (min 8 chars)'); return; }
+              if (next !== changePasswordForm.confirm) { setToastMessage('Passwords do not match'); return; }
+
+              const key = currentUser?.id || currentUser?.email || 'unknown';
+
+              // First, validate current password locally if there's a stored password
+              const localStored = workerPasswords[key];
+              if (localStored && localStored !== current) {
+                setToastMessage('Current password is incorrect');
+                return;
+              }
+
+              setChangePasswordSubmitting(true);
+              try {
+                // Try server-side password change; send current password for validation. Fall back to local update if API unavailable.
+                let serverSucceeded = false;
+                const authHeaders: HeadersInit = {
+                  'Content-Type': 'application/json',
+                  ...(token ? { Authorization: 'Bearer ' + token } : {}),
+                };
+                try {
+                  const urlCandidates: string[] = [];
+                  if (currentUser?.id) urlCandidates.push(`/api/users/${currentUser.id}/password`);
+                  urlCandidates.push('/api/change-password');
+
+                  for (const url of urlCandidates) {
+                    try {
+                      // prefer an endpoint that accepts { currentPassword, newPassword }
+                      const resp = await fetch(url, {
+                        method: 'POST',
+                        headers: authHeaders,
+                        body: JSON.stringify({ userId: currentUser?.id, currentPassword: current, newPassword: next })
+                      });
+                      if (resp.ok) { serverSucceeded = true; break; }
+
+                      const patchResp = await fetch(url, {
+                        method: 'PATCH',
+                        headers: authHeaders,
+                        body: JSON.stringify({ currentPassword: current, newPassword: next })
+                      });
+                      if (patchResp.ok) { serverSucceeded = true; break; }
+                    } catch (e) {
+                      // try next
+                    }
+                  }
+                } catch (err) {
+                  // ignore - fallback
+                }
+
+                if (!serverSucceeded) {
+                  if (!localStored) {
+                    setToastMessage('Unable to validate current password with server; change saved locally');
+                  }
+                }
+
+                // update local store so UI reflects new password
+                setWorkerPasswords((cur) => ({ ...cur, [key]: next }));
+                setChangePasswordOpen(false);
+
+                setToastMessage(serverSucceeded ? 'Password changed' : 'Password changed locally (server unavailable)');
+
+                // create a notification for admins if a worker changed their own password
+                if (currentUser?.role === 'WORKER') {
+                  const notif = { id: `notif-${Date.now()}`, title: 'Worker password changed', body: `${currentUser.name || currentUser?.email} changed their password`, read: false, createdAt: new Date().toISOString(), meta: { type: 'password-change', userId: currentUser.id } };
+                  let posted = false;
+                  try {
+                    const resp = await fetch('/api/notifications', {
+                      method: 'POST', headers: authHeaders, body: JSON.stringify(notif)
+                    });
+                    if (resp.ok) posted = true;
+                  } catch (e) {
+                    // ignore
+                  }
+                  if (!posted) setData((cur) => ({ ...cur, notifications: [notif, ...(cur.notifications || [])] }));
+                }
+
+                setChangePasswordForm({ current: '', next: '', confirm: '' });
+              } finally {
+                setChangePasswordSubmitting(false);
+              }
+            }}>
+              <label>Current password<input value={changePasswordForm.current} type="password" onChange={(ev) => setChangePasswordForm((c) => ({ ...c, current: ev.target.value }))} required /></label>
+              <label>New password<input value={changePasswordForm.next} type="password" onChange={(ev) => setChangePasswordForm((c) => ({ ...c, next: ev.target.value }))} required /></label>
+              <label>Confirm password<input value={changePasswordForm.confirm} type="password" onChange={(ev) => setChangePasswordForm((c) => ({ ...c, confirm: ev.target.value }))} required /></label>
+              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+       <button type="button" className="secondary-btn" onClick={() => setChangePasswordOpen(false)} disabled={changePasswordSubmitting}>Cancel</button>
+       <button className="primary-btn" type="submit" disabled={changePasswordSubmitting}>
+          {changePasswordSubmitting ? <><span className="spinner" aria-hidden="true" /> Saving...</> : 'Change password'}
+       </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+
       <main className="workspace">
         <header className="topbar">
           <div className="topbar-left">
-            <button
-              type="button"
-              className="mobile-menu-btn topbar-menu-btn"
-              aria-label={sidebarOpen ? 'Hide navigation' : 'Show navigation'}
-              onClick={() => setSidebarOpen((value) => !value)}
-            >
-              ☰
-            </button>
             <div>
               <p className="eyebrow">Good evening {currentUser?.name || 'Team Member'}</p>
               <h1>{navItems.find((item) => item.id === activeNav)?.label}</h1>
@@ -1981,41 +2532,19 @@ function App() {
               <button
                 type="button"
                 className={isOnline ? 'sync-status online' : 'sync-status offline'}
-                onClick={() => setSyncQueueOpen((value) => !value)}
+                onClick={() => {
+                  setSyncQueueOpen((value) => {
+                    const next = !value;
+                    if (next) setNotificationsOpen(false);
+                    return next;
+                  });
+                }}
                 aria-label="Pending sync actions"
               >
                 <span className="sync-dot" />
                 {isOnline ? 'Online' : 'Offline'} · {pendingSyncCount} pending
               </button>
-              {syncQueueOpen ? (
-                <div className="sync-panel">
-                  <div className="notification-panel-header">
-                    <strong>Sync queue</strong>
-                    <button type="button" className="secondary-btn" onClick={() => setSyncQueueOpen(false)}>Close</button>
-                  </div>
-                  <div className="sync-panel-body">
-                    {(() => {
-                      const entries = readQueuedSyncEntries();
-                      if (!entries.length) {
-                        return <p className="empty-copy">No pending actions right now.</p>;
-                      }
-                      return entries.slice(0, 8).map((item: Record<string, any>) => (
-                        <div key={item.id} className="sync-item">
-                          <strong>{item.action}</strong>
-                          <span>{item.tableName}</span>
-                          <small>{new Date(item.createdAt).toLocaleString()}</small>
-                        </div>
-                      ));
-                    })()}
-                  </div>
-                  <div className="modal-actions compact-actions">
-                    <button type="button" className="secondary-btn" onClick={() => setSyncQueueOpen(false)}>Close</button>
-                    <button type="button" className="primary-btn" onClick={async () => { setSyncQueueOpen(false); if (navigator.onLine) { await flushOfflineSyncQueue(); } else { setToastMessage('You are offline. Actions will sync automatically when online again.'); } }}>
-                      {isOnline ? 'Sync now' : 'Queue waiting'}
-                    </button>
-                  </div>
-                </div>
-              ) : null}
+              {/* sync-panel is portaled to document.body to avoid stacking/context clipping */}
             </div>
             <div className="notifications-wrap">
               <button
@@ -2024,7 +2553,11 @@ function App() {
                 aria-label="Notifications"
                 onClick={async () => {
                   const opening = !notificationsOpen;
-                  setNotificationsOpen(opening);
+                  setNotificationsOpen((value) => {
+                    const next = !value;
+                    if (next) setSyncQueueOpen(false);
+                    return next;
+                  });
                   if (opening) {
                     await loadData();
                   } else {
@@ -2035,40 +2568,6 @@ function App() {
                 <Bell size={18} />
                 <span>{data.notifications.filter((item) => !item.read).length}</span>
               </button>
-              {notificationsOpen ? (
-                <div className="notification-panel">
-                  <div className="notification-panel-header">
-                    <strong>Notifications</strong>
-                    <button type="button" className="secondary-btn" onClick={async () => { setNotificationsOpen(false); await markAllNotificationsRead(); }}>Close</button>
-                  </div>
-                  {data.notifications.length === 0 ? (
-                    <p className="empty-copy">No notifications yet.</p>
-                  ) : (
-                    <div className="notification-list">
-                      {data.notifications.map((item) => (
-                        <button
-                          type="button"
-                          key={item.id}
-                          className={item.read ? 'notification-item read' : 'notification-item unread'}
-                          onClick={async () => {
-                            await markNotificationRead(item.id);
-                            if (item.meta?.pondId) {
-                              setActiveNav('ponds');
-                              await openPond(item.meta.pondId);
-                            }
-                          }}
-                        >
-                          <div>
-                            <strong>{item.title}</strong>
-                            <span>{item.body || 'No details'}</span>
-                          </div>
-                          <small>{new Date(item.createdAt).toLocaleString()}</small>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ) : null}
             </div>
             <button className="secondary-btn" onClick={() => {
               localStorage.removeItem('aquaculture-token');
@@ -2087,14 +2586,108 @@ function App() {
         {activeNav === 'command' ? (
           <>
             <section className="metrics-grid">
-              <Metric label="Farm health" value={`${overview.healthScore}%`} detail="Based on mortality and water risk" icon={Activity} tone="blue" />
-              <Metric label="Feed logged" value={`${overview.totalFeed || 0} kg`} detail={overview.latestFeedSize !== 'Not recorded' ? `Size used: ${overview.latestFeedSize}` : 'No feed size logged yet'} icon={Sprout} tone="green" />
-              <Metric label="Mortality" value={`${overview.totalMortality || 0} fish`} detail="Stored mortality records" icon={AlertTriangle} tone="orange" />
-              {isOwner ? (
-                <Metric label="Net position" value={formatDalasi(overview.finance.profit)} detail={overview.finance.status === 'PROFIT' ? 'Running profit' : 'Running loss'} icon={overview.finance.status === 'PROFIT' ? TrendingUp : TrendingDown} tone={overview.finance.status === 'PROFIT' ? 'green' : 'orange'} />
-              ) : (
-                <Metric label="My ponds" value={String(data.ponds.length)} detail="Assigned to you" icon={Fish} tone="navy" />
-              )}
+              {(isOwner ? [
+                { key: 'health', label: 'Farm health', value: `${overview.healthScore}%`, detail: 'Based on mortality and water risk', icon: Activity, tone: 'blue' },
+                { key: 'feed', label: 'Feed logged', value: `${overview.totalFeed || 0} kg`, detail: overview.latestFeedSize !== 'Not recorded' ? `Size used: ${overview.latestFeedSize}` : 'No feed size logged yet', icon: Sprout, tone: 'green' },
+                { key: 'mortality', label: 'Mortality', value: `${overview.totalMortality || 0} fish`, detail: 'Stored mortality records', icon: AlertTriangle, tone: 'orange' },
+                { key: 'profit', label: 'Net position', value: formatDalasi(overview.finance.profit), detail: overview.finance.status === 'PROFIT' ? 'Running profit' : 'Running loss', icon: overview.finance.status === 'PROFIT' ? TrendingUp : TrendingDown, tone: overview.finance.status === 'PROFIT' ? 'green' : 'orange' },
+              ] : [
+                { key: 'health', label: 'Farm health', value: `${overview.healthScore}%`, detail: 'Based on job activity', icon: Activity, tone: 'blue' },
+                { key: 'feed', label: 'Feed logged', value: `${overview.totalFeed || 0} kg`, detail: 'Your assigned pond activity', icon: Sprout, tone: 'green' },
+                { key: 'mortality', label: 'Mortality', value: `${overview.totalMortality || 0} fish`, detail: 'Recent farm alerts', icon: AlertTriangle, tone: 'orange' },
+                { key: 'ponds', label: 'My ponds', value: String(data.ponds.length), detail: 'Assigned to you', icon: Fish, tone: 'navy' },
+              ]).map((metric) => (
+                <Metric
+                  key={metric.key}
+                  label={metric.label}
+                  value={metric.value}
+                  detail={metric.detail}
+                  icon={metric.icon}
+                  tone={metric.tone}
+                  active={selectedAnalyticsMetric === metric.key}
+                  onClick={() => setSelectedAnalyticsMetric(metric.key as 'health' | 'feed' | 'mortality' | 'profit' | 'ponds')}
+                />
+              ))}
+            </section>
+
+            <section className="panel analytics-panel">
+              <div className="panel-heading analytics-header">
+                <div>
+                  <p className="eyebrow">{isOwner ? 'Admin analytics' : 'Worker analytics'}</p>
+                  <h2>{analyticsSeries.title}</h2>
+                </div>
+                <div className="range-toggle" aria-label="Analytics range selector">
+                  {(['daily', 'weekly', 'monthly', 'yearly'] as const).map((range) => (
+                    <button
+                      key={range}
+                      type="button"
+                      className={selectedAnalyticsRange === range ? 'range-pill active' : 'range-pill'}
+                      onClick={() => setSelectedAnalyticsRange(range)}
+                    >
+                      {range.charAt(0).toUpperCase() + range.slice(1)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="analytics-visual" aria-label={`${analyticsSeries.title} ${analyticsSeries.rangeLabel} chart`}>
+                {(() => {
+                  const chartMaxValue = Math.max(...analyticsSeries.points.map((point) => Math.abs(point.value)), 1);
+                  const xStep = analyticsSeries.points.length > 1 ? 700 / (analyticsSeries.points.length - 1) : 0;
+                  const yTicks = Array.from({ length: 5 }, (_, index) => Math.round(chartMaxValue * ((4 - index) / 4)));
+                  const chartPoints = analyticsSeries.points.map((point, index) => {
+                    const x = 46 + (index * xStep);
+                    const y = 180 - ((Math.abs(point.value) / chartMaxValue) * 140);
+                    return { ...point, x, y };
+                  });
+
+                  return (
+                    <>
+                      <div className="chart-y-axis">
+                        {yTicks.map((value, index) => {
+                          const labelValue = selectedAnalyticsMetric === 'profit' ? formatDalasi(value) : selectedAnalyticsMetric === 'health' ? `${value}%` : value;
+                          return <span key={`y-label-${index}`}>{labelValue}</span>;
+                        })}
+                      </div>
+                      <div className="chart-surface">
+                        <svg viewBox="0 0 760 220" preserveAspectRatio="none" className="chart-svg" role="img" aria-label={`${analyticsSeries.title} chart`}>
+                          {Array.from({ length: 5 }, (_, index) => {
+                            const y = 20 + (index * 40);
+                            return <line key={`h-${index}`} x1="28" y1={y} x2="732" y2={y} className="chart-gridline" />;
+                          })}
+                          {chartPoints.map((point, index) => (
+                            <line key={`v-${index}`} x1={point.x} y1="20" x2={point.x} y2="180" className="chart-gridline subtle" />
+                          ))}
+                          <path className="chart-area" d={(() => {
+                            const path = chartPoints.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
+                            const firstX = chartPoints[0]?.x ?? 46;
+                            const lastX = chartPoints[chartPoints.length - 1]?.x ?? 46;
+                            return `${path} L ${lastX} 180 L ${firstX} 180 Z`;
+                          })()} />
+                          <path className="chart-line" d={chartPoints.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ')} />
+                          {chartPoints.map((point, index) => (
+                            <circle key={`dot-${index}`} cx={point.x} cy={point.y} r="4.5" className="chart-dot" />
+                          ))}
+                        </svg>
+                        <div className="analytics-bars">
+                          {chartPoints.map((point, index) => {
+                            const barHeight = Math.max(8, Math.min(100, (Math.abs(point.value) / chartMaxValue) * 100));
+                            return (
+                              <div
+                                key={`${point.label}-${index}`}
+                                className="analytics-bar-group compact"
+                                style={{ left: `${(point.x / 760) * 100}%`, height: `${barHeight}%`, width: `${Math.max(12, 180 / Math.max(chartPoints.length, 1))}px` }}
+                              >
+                                <span className="analytics-bar-rail" style={{ height: `${barHeight}%`, background: getBarTone(point.value) }} />
+                                <small>{point.label}</small>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
             </section>
 
             <section className="dashboard-grid">
@@ -2102,29 +2695,51 @@ function App() {
                 <RecordList records={isOwner ? data.ponds.slice(0, 6) : data.tasks.slice(0, 6)} emptyTitle={isOwner ? 'No ponds yet' : 'No tasks assigned'} render={(record) => isOwner ? (
                   <><strong>Pond {record.number}</strong><span>{record.assignedUser?.name || 'Unassigned'} | {titleCase(record.status || 'ACTIVE')}</span></>
                 ) : (
-                  <button type="button" className="record-row task-row" onClick={async () => {
-                    setSelectedTaskId(record.id);
-                    setTaskModalOpen(true);
-                    try {
-                      const res = await fetch(`${apiBaseUrl}/tasks/${record.id}`, { headers: { Authorization: token ? 'Bearer ' + token : '' } });
-                      if (res.ok) {
-                        const body = await res.json();
-                        setModalTask(body.task || null);
-                      } else {
+                  <div
+                    className={`swipe-delete-shell ${revealedSwipeAction?.type === 'task' && revealedSwipeAction.id === record.id ? 'revealed' : ''}`}
+                    onPointerDown={(event) => beginSwipeReveal('task', record.id, event)}
+                    onPointerMove={(event) => moveSwipeReveal('task', record.id, event)}
+                    onPointerUp={endSwipeReveal}
+                    onPointerLeave={endSwipeReveal}
+                  >
+                    <div className="swipe-delete-action">
+                      <button
+                        type="button"
+                        className="danger-btn"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          showDeleteConfirmation('task', record.id, record.title || 'task');
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                    <button type="button" className="record-row task-row" onClick={async () => {
+                      setSelectedTaskId(record.id);
+                      setTaskModalOpen(true);
+                      try {
+                        const res = await fetch(`${apiBaseUrl}/tasks/${record.id}`, { headers: { Authorization: token ? 'Bearer ' + token : '' } });
+                        if (res.ok) {
+                          const body = await res.json();
+                          setModalTask(body.task || null);
+                        } else {
+                          setModalTask(record);
+                        }
+                      } catch (err) {
+                        console.error('Failed to load task', err);
                         setModalTask(record);
                       }
-                    } catch (err) {
-                      console.error('Failed to load task', err);
-                      setModalTask(record);
-                    }
-                  }}>
-                    <div><strong>{record.title}</strong><span>{titleCase(record.status || 'OPEN')}</span></div>
-                  </button>
+                    }}>
+                      <div><strong>{record.title}</strong><span>{titleCase(record.status || 'OPEN')}</span></div>
+                    </button>
+                  </div>
                 )} />
               </Panel>
-              <Panel eyebrow="Notifications" title="Recent updates">
-                <RecordList records={data.notifications.slice(0, 5)} emptyTitle="No notifications yet" render={(item) => <><strong>{item.title}</strong><span>{new Date(item.createdAt).toLocaleString()}</span></>} />
-              </Panel>
+              {showRecentUpdatesPanel && (
+                <Panel eyebrow="Notifications" title="Recent updates">
+                  <RecordList records={data.notifications.slice(0, 5)} emptyTitle="No notifications yet" render={(item) => <><strong>{item.title}</strong><span>{new Date(item.createdAt).toLocaleString()}</span></>} />
+                </Panel>
+              )}
             </section>
           </>
         ) : null}
@@ -2224,39 +2839,81 @@ function App() {
               ) : null}
               <div className="pond-grid">
                 {data.ponds.map((pond) => (
-                  <button className={`pond-card pond-button ${!isOwner ? 'compact' : ''}`} key={pond.id} onClick={() => openPond(pond.id)}>
-                    <div><strong>Pond {pond.number}</strong><span>{pond.site?.name || 'Main site'} | {pond.assignedUser?.name || 'Unassigned'}</span></div>
-                    <div className="pond-stats">
-                      <span>{titleCase(pond.species || 'Fish')}</span>
-                      <span>{pond.current_population || 0} fish</span>
-                      <span>Open</span>
-                      {isOwner ? (
-                        <span
-                          className="delete-chip"
-                          role="button"
-                          tabIndex={0}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            showDeleteConfirmation('pond', pond.id, `Pond ${pond.number}`);
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter') {
-                              event.stopPropagation();
-                              showDeleteConfirmation('pond', pond.id, `Pond ${pond.number}`);
-                            }
-                          }}
-                        >
-                          Delete
-                        </span>
-                      ) : null}
+                  <div
+                    key={pond.id}
+                    className={`swipe-delete-shell ${revealedSwipeAction?.type === 'pond' && revealedSwipeAction.id === pond.id ? 'revealed' : ''}`}
+                    onPointerDown={(event) => beginSwipeReveal('pond', pond.id, event)}
+                    onPointerMove={(event) => moveSwipeReveal('pond', pond.id, event)}
+                    onPointerUp={endSwipeReveal}
+                    onPointerLeave={endSwipeReveal}
+                  >
+                    <div className="swipe-delete-action">
+                      <button
+                        type="button"
+                        className="danger-btn"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          showDeleteConfirmation('pond', pond.id, `Pond ${pond.number}`);
+                        }}
+                      >
+                        Delete
+                      </button>
                     </div>
-                  </button>
+                    <button
+                      className={`pond-card pond-button ${!isOwner ? 'compact' : ''}`}
+                      onClick={(event) => {
+                        if (swipeGuardRef.current) {
+                          swipeGuardRef.current = false;
+                          return;
+                        }
+                        event.stopPropagation();
+                        openPond(pond.id);
+                      }}
+                      onDoubleClick={() => openPond(pond.id)}
+                    >
+                      <div><strong>Pond {pond.number}</strong><span>{pond.site?.name || 'Main site'} | {pond.assignedUser?.name || 'Unassigned'}</span></div>
+                      <div className="pond-stats">
+                        <span>{titleCase(pond.species || 'Fish')}</span>
+                        <span>{pond.current_population || 0} fish</span>
+                        <span>Open</span>
+                      </div>
+                    </button>
+                  </div>
                 ))}
               </div>
             </Panel>
             {isOwner ? (
               <Panel eyebrow="Admin tools" title="Quick actions">
                 <div className="admin-action-grid">
+                   <form
+                     className="quick-pond-update-card worker-modal"
+                     onSubmit={async (event) => {
+                       event.preventDefault();
+                       if (!adminPondQuickUpdateId) {
+                         setToastMessage('Choose a pond first');
+                         return;
+                       }
+                       setSelectedPondId(adminPondQuickUpdateId);
+                       await openPond(adminPondQuickUpdateId);
+                       setActiveNav('ponds');
+                     }}
+                   >
+                     <h3>Quick pond update</h3>
+                     <div className="worker-create-form">
+                       <label className="worker-field full-width">
+                         <span>Select pond</span>
+                         <select value={adminPondQuickUpdateId} onChange={(event) => setAdminPondQuickUpdateId(event.target.value)}>
+                           <option value="">Choose a pond</option>
+                           {data.ponds.map((pond) => (
+                             <option key={pond.id} value={pond.id}>Pond {pond.number} · {pond.site?.name || 'Main site'}</option>
+                           ))}
+                         </select>
+                       </label>
+                       <div className="worker-form-footer full-width">
+                         <button type="submit" className="primary-btn compact-btn">Open pond update form</button>
+                       </div>
+                     </div>
+                   </form>
                   <button type="button" className="admin-action-card" onClick={() => { setAdminActionModal({ type: 'targetHarvest' }); setTargetHarvestAction((current) => ({ ...current, pondId: current.pondId || selectedPondId || data.ponds[0]?.id || '' })); }}>
                     <span>Set target harvest</span>
                   </button>
@@ -2584,69 +3241,165 @@ function App() {
                     return (
                       <div
                         key={worker.id}
-                        className={worker.blocked ? 'worker-card blocked' : 'worker-card'}
-                        onClick={() => setExpandedWorkerId((current) => current === worker.id ? null : worker.id)}
-                        role="button"
-                        tabIndex={0}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter' || event.key === ' ') {
-                            event.preventDefault();
-                            setExpandedWorkerId((current) => current === worker.id ? null : worker.id);
-                          }
-                        }}
+                        className={`swipe-delete-shell ${revealedSwipeAction?.type === 'worker' && revealedSwipeAction.id === worker.id ? 'revealed' : ''}`}
+                        onPointerDown={(event) => beginSwipeReveal('worker', worker.id, event)}
+                        onPointerMove={(event) => moveSwipeReveal('worker', worker.id, event)}
+                        onPointerUp={endSwipeReveal}
+                        onPointerLeave={endSwipeReveal}
                       >
-                        <div className="worker-card-top">
-                          <div className="worker-avatar">{(worker.name || worker.email || 'W').charAt(0).toUpperCase()}</div>
-                          <div className="worker-card-head">
-                            <strong>{worker.name || worker.email}</strong>
-                          </div>
-                          <span className={worker.blocked ? 'status-chip blocked' : 'status-chip active'}>
-                            {worker.blocked ? 'Blocked' : 'Active'}
-                          </span>
+                        <div className="swipe-delete-action">
+                          <button
+                            type="button"
+                            className="danger-btn"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              showDeleteConfirmation('worker', worker.id, worker.name || worker.email || 'worker');
+                            }}
+                          >
+                            Delete
+                          </button>
                         </div>
+                        <div
+                          className={worker.blocked ? 'worker-card blocked' : 'worker-card'}
+                          onClick={() => {
+                            if (swipeGuardRef.current) {
+                              swipeGuardRef.current = false;
+                              return;
+                            }
+                            setExpandedWorkerId((current) => current === worker.id ? null : worker.id);
+                          }}
+                          onDoubleClick={() => setExpandedWorkerId((current) => current === worker.id ? null : worker.id)}
+                          role="button"
+                          tabIndex={0}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault();
+                              setExpandedWorkerId((current) => current === worker.id ? null : worker.id);
+                            }
+                          }}
+                        >
+                              <div className="worker-card-top">
+                                <div className="worker-avatar">{(worker.name || worker.email || 'W').charAt(0).toUpperCase()}</div>
+                                <div className="worker-card-head">
+                                  <strong>{worker.name || worker.email}</strong>
+                                </div>
+                                <span className={worker.blocked ? 'status-chip blocked' : 'status-chip active'}>
+                                  {worker.blocked ? 'Blocked' : 'Active'}
+                                </span>
+                              </div>
 
-                        {isExpanded ? (
-                          <>
-                            <div className="worker-meta-grid compact-meta-grid">
-                              <div>
-                                <small>Email</small>
-                                <span>{worker.email}</span>
-                              </div>
-                              <div>
-                                <small>Password</small>
-                                <span>{worker.password || workerPasswords[worker.id || worker.email] || 'Assigned password'}</span>
-                              </div>
-                              <div>
-                                <small>Created</small>
-                                <span>{worker.createdAt ? new Date(worker.createdAt).toLocaleString() : 'Recent'}</span>
-                              </div>
-                              <div>
-                                <small>Access</small>
-                                <span>{worker.blocked ? 'Revoked' : 'Granted'}</span>
-                              </div>
-                            </div>
+                              {isExpanded ? (
+                                <>
+                                  <div className="worker-meta-grid compact-meta-grid">
+                                    <div>
+                                      <small>Email</small>
+                                      <span>{worker.email}</span>
+                                    </div>
+                                    <div>
+                                      <small>Password</small>
+                                      <span>{worker.password || workerPasswords[worker.id || worker.email] || 'Assigned password'}</span>
+                                    </div>
+                                    <div>
+                                      <small>Created</small>
+                                      <span>{worker.createdAt ? new Date(worker.createdAt).toLocaleString() : 'Recent'}</span>
+                                    </div>
+                                    <div>
+                                      <small>Access</small>
+                                      <span>{worker.blocked ? 'Revoked' : 'Granted'}</span>
+                                    </div>
+                                  </div>
 
-                            <div className="worker-card-actions">
-                              <button type="button" className="secondary-btn compact-btn" onClick={(event) => {
-                                event.stopPropagation();
-                                void copyWorkerDetail(getWorkerCredentialsText(worker), 'Credentials');
-                              }}>
-                                Copy
-                              </button>
-                              <button
-                                type="button"
-                                className={worker.blocked ? 'secondary-btn compact-btn' : 'primary-btn compact-btn'}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  setWorkerAccessModal({ open: true, worker, action: worker.blocked ? 'unblock' : 'block' });
-                                }}
-                              >
-                                {worker.blocked ? 'Unblock' : 'Block'}
-                              </button>
+                                  <div className="worker-card-actions">
+                                    <button
+                                      type="button"
+                                      className="secondary-btn compact-btn"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        void copyWorkerDetail(getWorkerCredentialsText(worker), 'Credentials');
+                                      }}
+                                    >
+                                      Copy
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className={worker.blocked ? 'secondary-btn compact-btn' : 'primary-btn compact-btn'}
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        setWorkerAccessModal({ open: true, worker, action: worker.blocked ? 'unblock' : 'block' });
+                                      }}
+                                    >
+                                      {worker.blocked ? 'Unblock' : 'Block'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="secondary-btn compact-btn"
+                                      onClick={async (event) => {
+                                        event.stopPropagation();
+                                        const temp = `Tmp${Math.random().toString(36).slice(2, 9)}`;
+                                        const authHeaders: HeadersInit = {
+                                          'Content-Type': 'application/json',
+                                          ...(token ? { Authorization: 'Bearer ' + token } : {}),
+                                        };
+                                        let apiOk = false;
+                                        try {
+                                          const resp = await fetch(`/api/users/${worker.id}/reset-password`, {
+                                            method: 'POST',
+                                            headers: authHeaders,
+                                            body: JSON.stringify({ tempPassword: temp }),
+                                          });
+                                          if (resp.ok) {
+                                            apiOk = true;
+                                          } else {
+                                            const p = await fetch(`/api/users/${worker.id}/password`, {
+                                              method: 'PATCH',
+                                              headers: authHeaders,
+                                              body: JSON.stringify({ newPassword: temp }),
+                                            });
+                                            if (p.ok) apiOk = true;
+                                          }
+                                        } catch (error) {
+                                          // ignore and fallback locally
+                                        }
+
+                                        if (apiOk) {
+                                          try {
+                                            await navigator.clipboard.writeText(temp);
+                                            setToastMessage('Temporary password copied (server updated)');
+                                          } catch (error) {
+                                            setToastMessage('Password reset (server updated)');
+                                          }
+                                        } else {
+                                          setWorkerPasswords((cur) => ({ ...cur, [worker.id || worker.email]: temp }));
+                                          setToastMessage('Temp password generated (local only)');
+                                        }
+
+                                        const notif = {
+                                          id: `notif-${Date.now()}`,
+                                          title: 'Password reset',
+                                          body: 'Your password was reset by admin. Check credentials.',
+                                          read: false,
+                                          createdAt: new Date().toISOString(),
+                                          meta: { type: 'password-reset', userId: worker.id },
+                                        };
+                                        try {
+                                          const nresp = await fetch('/api/notifications', {
+                                            method: 'POST',
+                                            headers: authHeaders,
+                                            body: JSON.stringify(notif),
+                                          });
+                                          if (!nresp.ok) throw new Error('notif failed');
+                                        } catch (error) {
+                                          setData((cur) => ({ ...cur, notifications: [notif, ...(cur.notifications || [])] }));
+                                        }
+                                      }}
+                                    >
+                                      Reset password
+                                    </button>
+                                  </div>
+                                </>
+                              ) : null}
                             </div>
-                          </>
-                        ) : null}
-                      </div>
+                        </div>
                     );
                   })
                 )}
@@ -2681,14 +3434,14 @@ function App() {
                 </div>
 
                 {showFinanceForm ? (
-                  <form className="finance-form" onSubmit={handleCreateFinanceRecord} style={{ display: 'grid', gridTemplateColumns: '140px 180px 150px 140px 110px 160px 130px 180px 1fr', gap: 12, marginBottom: 18, alignItems: 'center', padding: 12, background: 'rgba(15, 23, 42, 0.03)', border: '1px solid rgba(148, 163, 184, 0.35)', borderRadius: 12 }}>
+                  <form className="finance-form" onSubmit={handleCreateFinanceRecord}>
                     <select value={financeForm.type} onChange={(event) => setFinanceForm({ ...financeForm, type: event.target.value })}>
                       <option value="EXPENSE">Running Cost</option>
                       <option value="INCOME">Sales</option>
                       <option value="BUDGET">Fixed Cost</option>
                     </select>
                     <input placeholder="Category" value={financeForm.category} onChange={(event) => setFinanceForm({ ...financeForm, category: event.target.value })} required />
-                    <div style={{ display: 'flex', gap: 8 }}>
+                    <div className="finance-qty-wrap">
                       <input type="number" min="0" step="0.01" placeholder="Qty" value={financeForm.quantity} onChange={(event) => {
                         const quantity = event.target.value;
                         const unitPrice = Number(financeForm.unitPrice) || 0;
@@ -2715,7 +3468,14 @@ function App() {
                   </form>
                 ) : null}
 
-                <FinanceTable records={data.financeRecords} onDelete={(id) => showDeleteConfirmation('finance', id, `Finance record ${id}`)} />
+                <FinanceTable
+                  records={data.financeRecords}
+                  onDelete={(id) => showDeleteConfirmation('finance', id, `Finance record ${id}`)}
+                  revealedId={revealedSwipeAction && revealedSwipeAction.type === 'finance' ? revealedSwipeAction.id : null}
+                  onRevealStart={(id, event) => beginSwipeReveal('finance', id, event)}
+                  onRevealMove={(id, event) => moveSwipeReveal('finance', id, event)}
+                  onRevealEnd={endSwipeReveal}
+                />
               </Panel>
             </section>
           </>
@@ -2796,7 +3556,36 @@ function App() {
                     const status = low ? 'Low stock' : Number(item.currentStock || 0) > Number(item.minStock || 0) * 2 ? 'Healthy' : 'Watching';
                     const latestTransaction = item.transactions?.[0];
                     return (
-                      <div key={item.id} className={low ? 'inventory-card danger' : 'inventory-card'}>
+                      <div
+                        key={item.id}
+                        className={low ? `inventory-card danger ${inventoryContextId === item.id ? 'context-menu-open' : ''}` : `inventory-card ${inventoryContextId === item.id ? 'context-menu-open' : ''}`}
+                        onContextMenu={(event) => {
+                          event.preventDefault();
+                          setInventoryContextId(item.id);
+                        }}
+                        onPointerDown={() => {
+                          clearInventoryLongPress();
+                          inventoryLongPressTimerRef.current = window.setTimeout(() => {
+                            setInventoryContextId(item.id);
+                          }, 500);
+                        }}
+                        onPointerUp={clearInventoryLongPress}
+                        onPointerLeave={clearInventoryLongPress}
+                      >
+                        {inventoryContextId === item.id ? (
+                          <div className="inventory-context-action">
+                            <button
+                              type="button"
+                              className="danger-btn"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                showDeleteConfirmation('inventory', item.id, item.name || 'inventory item');
+                              }}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        ) : null}
                         <div className="inventory-card-header">
                           <div>
                             <strong>{item.name}</strong>
@@ -3044,15 +3833,36 @@ function PondSummaryPanel({
   );
 }
 
-function FinanceTable({ records, onDelete }: { records: any[]; onDelete: (id: string) => void }) {
+function FinanceTable({
+  records,
+  onDelete,
+  revealedId,
+  onRevealStart,
+  onRevealMove,
+  onRevealEnd,
+}: {
+  records: any[];
+  onDelete: (id: string) => void;
+  revealedId: string | null;
+  onRevealStart: (id: string, event: React.PointerEvent<HTMLTableRowElement>) => void;
+  onRevealMove: (id: string, event: React.PointerEvent<HTMLTableRowElement>) => void;
+  onRevealEnd: () => void;
+}) {
   if (records.length === 0) return <p className="empty-copy">No finance records yet.</p>;
   return (
     <div className="finance-table-wrap">
       <table className="finance-table">
-        <thead><tr><th>No.</th><th>Type</th><th>Category</th><th>Qty</th><th>Unit Price</th><th>Amount</th><th>Pond</th><th>Date</th><th></th></tr></thead>
+        <thead><tr><th>No.</th><th>Type</th><th>Category</th><th>Qty</th><th>Unit Price</th><th>Amount</th><th>Pond</th><th>Date</th><th className="finance-delete-head">Delete</th></tr></thead>
         <tbody>
           {records.map((record, index) => (
-            <tr key={record.id}>
+            <tr
+              key={record.id}
+              className={revealedId === record.id ? 'reveal-row shown' : 'reveal-row'}
+              onPointerDown={(event) => onRevealStart(record.id, event)}
+              onPointerMove={(event) => onRevealMove(record.id, event)}
+              onPointerUp={onRevealEnd}
+              onPointerLeave={onRevealEnd}
+            >
               <td>{index + 1}</td>
               <td>{formatFinanceType(record.type)}</td>
               <td>{record.category || '-'}</td>
@@ -3061,7 +3871,19 @@ function FinanceTable({ records, onDelete }: { records: any[]; onDelete: (id: st
               <td>{formatDalasi(record.amount)}</td>
               <td>{record.pond ? `Pond ${record.pond.number}` : 'All ponds'}</td>
               <td>{new Date(record.recordedAt).toLocaleDateString()}</td>
-              <td><button className="danger-icon" onClick={() => { onDelete(record.id); }} aria-label="Delete finance record"><Trash2 size={15} /></button></td>
+              <td className="finance-delete-cell">
+                <button
+                  type="button"
+                  className="danger-icon"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDelete(record.id);
+                  }}
+                  aria-label="Delete finance record"
+                >
+                  Delete
+                </button>
+              </td>
             </tr>
           ))}
         </tbody>
@@ -3070,13 +3892,18 @@ function FinanceTable({ records, onDelete }: { records: any[]; onDelete: (id: st
   );
 }
 
-function Metric({ label, value, detail, icon: Icon, tone }: { label: string; value: string; detail: string; icon: typeof Activity; tone: string }) {
+function Metric({ label, value, detail, icon: Icon, tone, active = false, onClick }: { label: string; value: string; detail: string; icon: typeof Activity; tone: string; active?: boolean; onClick?: () => void }) {
   return (
-    <article className={`metric-card ${tone}`}>
+    <button
+      type="button"
+      className={active ? `metric-card ${tone} selected` : `metric-card ${tone}`}
+      aria-pressed={active}
+      onClick={onClick}
+    >
       <div><span>{label}</span><Icon size={20} /></div>
       <strong>{value}</strong>
       <small>{detail}</small>
-    </article>
+    </button>
   );
 }
 
