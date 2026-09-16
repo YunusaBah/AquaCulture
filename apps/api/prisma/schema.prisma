@@ -42,6 +42,7 @@ model User {
   taskAssignments TaskAssignment[]
   taskComments    TaskComment[]
   notifications   Notification[]
+  chatMessages    ChatMessage[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -341,6 +342,17 @@ model Notification {
   read      Boolean  @default(false)
   meta      Json?
   createdAt DateTime @default(now())
+}
+
+model ChatMessage {
+  id        String   @id @default(uuid())
+  sender    User     @relation(fields: [senderId], references: [id])
+  senderId  String
+  text      String?
+  imageUrl  String?
+  mentions  Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model DeviceSync {

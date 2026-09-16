@@ -1,0 +1,41 @@
+.pond-restock-inline {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px dashed rgba(148,163,184,0.12);
+  border-radius: 10px;
+  background: rgba(255,255,255,0.6);
+}
+
+/* small adjustment for finance popup on smaller screens */
+@media (max-width: 900px) {
+  .finance-form-popup {
+    position: static;
+    top: auto;
+    left: auto;
+    right: auto;
+    width: 100%;
+    transform: none;
+    box-shadow: none;
+  }
+}
+
+/* Make the admin restock popup input compact */
+.admin-action-modal .worker-field input[type="number"] {
+  width: 130px;
+  padding: 6px 8px;
+  font-size: 0.95rem;
+}
+
+.admin-action-modal .worker-field input::placeholder {
+  font-size: 0.9rem;
+  color: rgba(15,23,42,0.45);
+}
+
+/* Ensure modal layout doesn't overflow on very small screens */
+.admin-action-modal .worker-field.full-width select,
+.admin-action-modal .worker-field.full-width input {
+  width: 100%;
+  max-width: 320px;
+}

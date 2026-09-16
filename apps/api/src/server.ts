@@ -15,6 +15,7 @@ import notificationRoutes from './routes/notifications';
 import siteRoutes from './routes/sites';
 import syncRoutes from './routes/sync';
 import harvestRoutes from './routes/harvest';
+import chatRoutes from './routes/chat';
 import { PORT } from './config';
 
 const app = express();
@@ -41,6 +42,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/sites', siteRoutes);
 app.use('/api/sync', syncRoutes);
 app.use('/api/harvests', harvestRoutes);
+app.use('/api/chat', chatRoutes);
 
 app.get('/api/health', (_, res) => res.json({ status: 'ok', ts: Date.now() }));
 

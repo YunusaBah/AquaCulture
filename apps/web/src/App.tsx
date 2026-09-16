@@ -7,11 +7,15 @@ import {
   CheckCircle2,
   ClipboardList,
   Droplets,
+  FileText,
   Fish,
+  MessageSquare,
+  Moon,
   Package,
   Plus,
   Send,
   Sprout,
+  Sun,
   Trash2,
   TrendingDown,
   TrendingUp,
@@ -29,6 +33,17 @@ type CurrentUser = {
   email: string;
   name: string | null;
   role: 'OWNER' | 'WORKER';
+};
+
+type ChatMessage = {
+  id: string;
+  senderId: string;
+  senderName: string;
+  senderRole: 'OWNER' | 'WORKER';
+  text: string;
+  imageUrl?: string | null;
+  mentions?: string[];
+  createdAt: string;
 };
 
 type ApiState = {
@@ -65,6 +80,7 @@ const ownerNav = [
   { id: 'tasks', label: 'Tasks', icon: ClipboardList },
   { id: 'workers', label: 'Workers', icon: Users },
   { id: 'finance', label: 'Finance', icon: Wallet },
+  { id: 'reports', label: 'Reports', icon: FileText },
   { id: 'inventory', label: 'Inventory', icon: Package },
 ];
 
@@ -72,6 +88,7 @@ const workerNav = [
   { id: 'command', label: "Today's Analytics", icon: ClipboardList },
   { id: 'ponds', label: 'My Ponds', icon: Fish },
   { id: 'tasks', label: 'Tasks', icon: ClipboardList },
+  { id: 'reports', label: 'Reports', icon: FileText },
 ];
 
 const viewerNav = [
@@ -144,6 +161,11 @@ function App() {
   const [activeNav, setActiveNav] = useState('command');
   const [sidebarOpen, setSidebarOpen] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth > 1120));
   const [profileOpen, setProfileOpen] = useState(false);
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    if (typeof window === 'undefined') return 'light';
+    const stored = localStorage.getItem('aquaculture-theme');
+    return stored === 'dark' ? 'dark' : 'light';
+  });
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const [changePasswordSubmitting, setChangePasswordSubmitting] = useState(false);
   const [changePasswordForm, setChangePasswordForm] = useState({ current: '', next: '', confirm: '' });
@@ -231,6 +253,7 @@ function App() {
     };
   }, [sidebarOpen, profileOpen]);
   const [loading, setLoading] = useState(false);
+  const [reportRange, setReportRange] = useState<'daily' | 'weekly' | 'monthly' | 'yearly'>('weekly');
   const [data, setData] = useState<ApiState>(emptyState);
   const [fieldNote, setFieldNote] = useState('Fed Pond 3. Fish appetite was strong. No dead fish. Water level normal.');
   const [selectedPondId, setSelectedPondId] = useState<string | null>(null);
@@ -252,10 +275,96 @@ function App() {
   const swipeDragRef = useRef<{ type: 'finance' | 'worker' | 'inventory' | 'task' | 'pond'; id: string; startX: number; moved: boolean } | null>(null);
   const swipeGuardRef = useRef(false);
   const [adminPondQuickUpdateId, setAdminPondQuickUpdateId] = useState('');
+  const [adminRestockQty, setAdminRestockQty] = useState('');
   const [expandedWorkerId, setExpandedWorkerId] = useState<string | null>(null);
   const [workerPasswords, setWorkerPasswords] = useState<Record<string, string>>({});
   const [inventoryContextId, setInventoryContextId] = useState<string | null>(null);
   const inventoryLongPressTimerRef = useRef<number | null>(null);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatDraft, setChatDraft] = useState('');
+  const [chatPreviewImage, setChatPreviewImage] = useState<string | null>(null);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const stored = localStorage.getItem('aquaculture-global-chat');
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [revealedChatId, setRevealedChatId] = useState<string | null>(null);
+  const [chatRevealDirection, setChatRevealDirection] = useState<'left' | 'right' | null>(null);
+  const [chatReplyTargetId, setChatReplyTargetId] = useState<string | null>(null);
+  const [chatDeleteChoiceId, setChatDeleteChoiceId] = useState<string | null>(null);
+  const chatListRef = useRef<HTMLDivElement | null>(null);
+  const lastMentionedChatIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!token && typeof window !== 'undefined') {
+      localStorage.setItem('aquaculture-global-chat', JSON.stringify(chatMessages));
+    }
+  }, [chatMessages, token]);
+
+  useEffect(() => {
+    if (!chatOpen || !chatListRef.current) return;
+    requestAnimationFrame(() => {
+      if (!chatListRef.current) return;
+      const list = chatListRef.current;
+      list.scrollTo({ top: list.scrollHeight, behavior: 'auto' });
+    });
+  }, [chatOpen, chatMessages.length, chatMessages]);
+
+  useEffect(() => {
+    if (!currentUser || !chatMessages.length) return;
+    const latest = chatMessages[chatMessages.length - 1];
+    if (!latest || latest.senderId === currentUser.id || latest.id === lastMentionedChatIdRef.current) return;
+    const mentionTargets = (latest.mentions || []).map((name) => name.trim().toLowerCase().replace(/^@/, ''));
+    const currentHandle = (currentUser.name || currentUser.email.split('@')[0]).trim().toLowerCase();
+    const currentLocalPart = currentUser.email.trim().toLowerCase().split('@')[0];
+    const shouldNotify = mentionTargets.some((name) => name === currentHandle || name === currentLocalPart || name === currentUser.email.trim().toLowerCase());
+    if (shouldNotify) {
+      lastMentionedChatIdRef.current = latest.id;
+      setToastMessage(`${latest.senderName} mentioned you in chat`);
+    }
+  }, [chatMessages, currentUser]);
+
+  const normalizeChatMessage = useCallback((message: any): ChatMessage => ({
+    id: message.id,
+    senderId: message.senderId || message.sender?.id || '',
+    senderName: message.sender?.name || message.sender?.email?.split('@')[0] || 'User',
+    senderRole: message.sender?.role === 'OWNER' || message.senderRole === 'OWNER' ? 'OWNER' : 'WORKER',
+    text: message.text || '',
+    imageUrl: message.imageUrl || null,
+    mentions: Array.isArray(message.mentions) ? message.mentions : [],
+    createdAt: message.createdAt || new Date().toISOString(),
+  }), []);
+
+  const loadChatMessages = useCallback(async () => {
+    if (!token) {
+      setChatMessages((current) => current);
+      return;
+    }
+
+    try {
+      const response = await fetch(`${apiBaseUrl}/chat/messages`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const payload = await response.json().catch(() => ({ messages: [] }));
+      if (!response.ok) {
+        console.warn('Failed to load chat messages', payload.error || response.statusText);
+        return;
+      }
+      setChatMessages((payload.messages || []).map(normalizeChatMessage));
+    } catch (error) {
+      console.warn('Chat messages unavailable', error);
+    }
+  }, [apiBaseUrl, normalizeChatMessage, token]);
+
+  useEffect(() => {
+    if (token) {
+      void loadChatMessages();
+    }
+  }, [loadChatMessages, token]);
 
   // Owner harvest recording UI state
   const [showHarvestForm, setShowHarvestForm] = useState(false);
@@ -362,8 +471,10 @@ function App() {
     targetHarvestUnit: 'g' as 'g' | 'kg',
     assignedUserId: 'all',
   });
-  const [adminActionModal, setAdminActionModal] = useState<{ type: 'targetHarvest' | 'recommendFeed' | 'mortality' } | null>(null);
-  const [targetHarvestAction, setTargetHarvestAction] = useState({ pondId: '', date: '', time: '09:00' });
+  const [adminActionModal, setAdminActionModal] = useState<{ type: 'targetHarvest' | 'harvestQuantity' | 'recommendFeed' | 'mortality' | 'restock' } | null>(null);
+  const [quickPondUpdateOpen, setQuickPondUpdateOpen] = useState(false);
+  const [targetHarvestAction, setTargetHarvestAction] = useState({ pondId: '', date: '', time: '09:00', quantity: '' });
+  const [harvestQuantityAction, setHarvestQuantityAction] = useState({ pondId: '', quantity: '', avgWeightGrams: '', biomassKg: '', method: '', destination: '' });
   const [recommendFeedAction, setRecommendFeedAction] = useState({ pondId: '', inventoryItemId: '', feedSize: '1mm', quantityKg: '1' });
   const [mortalityAction, setMortalityAction] = useState({ pondId: '', count: '', cause: '', observedAt: '' });
   const [showPondCreateModal, setShowPondCreateModal] = useState(false);
@@ -441,6 +552,169 @@ function App() {
     setPendingSyncCount([...entries, nextEntry].length);
   }, [readQueuedSyncEntries]);
 
+  const handleChatDraftChange = (value: string) => {
+    setChatDraft(value);
+    if (!value.includes('@')) {
+      setChatReplyTargetId(null);
+    }
+  };
+
+  const handleChatMentionSelect = (user: { name: string }) => {
+    const replacement = `@${user.name} `;
+    const match = /(^|\s)@[a-zA-Z0-9_.-]*$/;
+    setChatDraft((current) => {
+      const next = current.replace(match, (fullMatch) => {
+        const prefix = fullMatch.startsWith(' ') ? ' ' : '';
+        return `${prefix}${replacement}`;
+      });
+      return next;
+    });
+  };
+
+  const handleChatSwipeStart = (messageId: string, event: React.PointerEvent<HTMLElement>) => {
+    const target = event.currentTarget as HTMLElement & { __chatSwipeStartX?: number };
+    target.__chatSwipeStartX = event.clientX;
+  };
+
+  const handleChatSwipeMove = (messageId: string, event: React.PointerEvent<HTMLElement>) => {
+    const target = event.currentTarget as HTMLElement & { __chatSwipeStartX?: number };
+    const startX = target.__chatSwipeStartX ?? event.clientX;
+    const delta = event.clientX - startX;
+
+    if (delta < -55) {
+      setRevealedChatId(messageId);
+      setChatRevealDirection('left');
+      setChatReplyTargetId(null);
+    } else if (delta > 55) {
+      setRevealedChatId(messageId);
+      setChatRevealDirection('right');
+      setChatReplyTargetId(messageId);
+    }
+  };
+
+  const handleChatSwipeEnd = (event: React.PointerEvent<HTMLElement>) => {
+    const target = event.currentTarget as HTMLElement & { __chatSwipeStartX?: number };
+    target.__chatSwipeStartX = undefined;
+  };
+
+  const handleChatPhotoUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file || !file.type.startsWith('image/')) return;
+    const reader = new FileReader();
+    reader.onload = () => setChatPreviewImage(String(reader.result || ''));
+    reader.readAsDataURL(file);
+    event.target.value = '';
+  };
+
+  const handleChatSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!currentUser) return;
+
+    const replyTarget = chatReplyTargetId ? chatMessages.find((message) => message.id === chatReplyTargetId) : null;
+    const replyPrefix = replyTarget ? `Replying to @${replyTarget.senderName}: ` : '';
+    const trimmed = chatDraft.trim();
+    const finalText = `${replyPrefix}${trimmed}`.trim();
+    if (!finalText && !chatPreviewImage) return;
+
+    const mentionNames = [...new Set((finalText.match(/@([A-Za-z0-9_.-]+)/g) || []).map((match) => match.slice(1).trim()))];
+
+    try {
+      if (token) {
+        const response = await fetch(`${apiBaseUrl}/chat/messages`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            text: finalText,
+            imageUrl: chatPreviewImage,
+            mentions: mentionNames,
+          }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload.error || 'Chat send failed');
+        }
+        setChatMessages((current: ChatMessage[]) => [...current, normalizeChatMessage(payload.message)]);
+      } else {
+        const nextMessage: ChatMessage = {
+          id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          senderId: currentUser.id,
+          senderName: currentUser.name || currentUser.email.split('@')[0],
+          senderRole: currentUser.role,
+          text: finalText,
+          imageUrl: chatPreviewImage,
+          mentions: mentionNames,
+          createdAt: new Date().toISOString(),
+        };
+        setChatMessages((current: ChatMessage[]) => [...current, nextMessage]);
+      }
+    } catch (error) {
+      console.warn('Chat send failed', error);
+      setToastMessage('Unable to send chat message right now.');
+      return;
+    }
+
+    setChatDraft('');
+    setChatPreviewImage(null);
+    setChatReplyTargetId(null);
+    setChatRevealDirection(null);
+    setChatOpen(true);
+  };
+
+  const handleDeleteChatMessage = async (messageId: string, scope: 'all' | 'mine' = 'all') => {
+    if (!currentUser) return;
+
+    if (scope === 'mine') {
+      setChatMessages((current: ChatMessage[]) => current.filter((message: ChatMessage) => !(message.id === messageId && message.senderId === currentUser.id)));
+      setRevealedChatId((current) => current === messageId ? null : current);
+      setChatDeleteChoiceId(null);
+      return;
+    }
+
+    try {
+      if (token) {
+        const response = await fetch(`${apiBaseUrl}/chat/messages/${messageId}?scope=all`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.error || 'Delete failed');
+        }
+      }
+
+      setChatMessages((current: ChatMessage[]) => current.filter((message: ChatMessage) => message.id !== messageId || message.senderId !== currentUser.id));
+      setRevealedChatId((current) => current === messageId ? null : current);
+      setChatDeleteChoiceId(null);
+    } catch (error) {
+      console.warn('Failed to delete chat message', error);
+    }
+  };
+
+  const handleClearChatMessages = async () => {
+    if (!currentUser) return;
+    const confirmed = window.confirm('Clear only your chat history? This cannot delete anyone else\'s messages.');
+    if (!confirmed) return;
+
+    try {
+      if (token) {
+        const response = await fetch(`${apiBaseUrl}/chat/messages?scope=mine`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.error || 'Clear failed');
+        }
+      }
+
+      setChatMessages((current: ChatMessage[]) => current.filter((message: ChatMessage) => message.senderId !== currentUser.id));
+    } catch (error) {
+      console.warn('Failed to clear chat messages', error);
+    }
+  };
 
   const loadData = useCallback(async () => {
     if (!token) return;
@@ -554,6 +828,11 @@ function App() {
   }, [isOwner, loadWorkerRoster, token]);
 
   useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('aquaculture-theme', theme);
+  }, [theme]);
+
+  useEffect(() => {
     const handleResize = () => {
       if (window.innerWidth > 1120) {
         setSidebarOpen(true);
@@ -591,15 +870,13 @@ function App() {
     };
   }, [flushOfflineSyncQueue, readQueuedSyncEntries, token]);
 
-  // Enhanced worker pond update: attempt immediate POSTs; if any fail, queue a consolidated pond_update
-  async function handleWorkerPondLogEnhanced(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!token || !selectedPondId) return;
+  async function submitPondUpdateForPond(pondId: string) {
+    if (!token || !pondId) return;
 
     const feedGrams = Number(pondLogForm.feedGrams) || Number(pondLogForm.feedKg) || 0;
     const feedKgValue = feedGrams > 0 ? Number((feedGrams / 1000).toFixed(3)) : Number(pondLogForm.feedKg) || 0;
     const payload = {
-      pondId: selectedPondId,
+      pondId,
       feedKg: feedKgValue,
       feedGrams,
       feedSize: pondLogForm.feedSize || '4mm',
@@ -624,7 +901,7 @@ function App() {
     };
 
     if (!navigator.onLine) {
-      queueOfflineSyncEntry('pond_update', payload, 'pond_daily_log', selectedPondId);
+      queueOfflineSyncEntry('pond_update', payload, 'pond_daily_log', pondId);
       resetPondLogForm();
       return;
     }
@@ -637,7 +914,7 @@ function App() {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          pondId: selectedPondId,
+          pondId,
           quantityKg: feedKgValue,
           feedSize: pondLogForm.feedSize || '4mm',
           feedType: data.inventoryItems.find((item) => item.id === pondLogForm.inventoryItemId)?.name || 'Pellet',
@@ -652,7 +929,7 @@ function App() {
       method: 'POST',
       headers,
       body: JSON.stringify({
-        pondId: selectedPondId,
+        pondId,
         ph: Number(pondLogForm.ph) || undefined,
         dissolvedO2: Number(pondLogForm.dissolvedO2) || undefined,
         ammonia: Number(pondLogForm.ammonia) || undefined,
@@ -667,17 +944,15 @@ function App() {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          pondId: selectedPondId,
+          pondId,
           numberDead: Number(pondLogForm.mortality),
           possibleCause: pondLogForm.mortalityCause || 'Unspecified',
         }),
       }));
     }
 
-    // immediate harvest creation when provided — only owners may record harvests
     if (isOwner && Number(pondLogForm.harvestQuantity) > 0) {
       const harvestQtyNum = Number(pondLogForm.harvestQuantity);
-      // integrity checks: integer positive
       if (!Number.isInteger(harvestQtyNum) || harvestQtyNum <= 0) {
         alert('Harvest quantity must be a positive whole number (no fractional fish).');
       } else {
@@ -685,23 +960,16 @@ function App() {
         if (harvestQtyNum > currentLive) {
           alert('Harvest quantity cannot exceed current live fish. Please correct the value.');
         } else {
-          // auto-calc biomass if avg weight provided and biomass empty
           let biomassVal = pondLogForm.harvestBiomassKg && Number(pondLogForm.harvestBiomassKg) > 0 ? Number(pondLogForm.harvestBiomassKg) : undefined;
           const avgW = pondLogForm.harvestAvgWeight ? Number(pondLogForm.harvestAvgWeight) : undefined;
-          if (!biomassVal && avgW && harvestQtyNum > 0) {
-            biomassVal = Number(((avgW * harvestQtyNum) / 1000).toFixed(2));
-          }
-
-          const confirmDetails = { harvestQty: harvestQtyNum, biomassKg: biomassVal, currentLive };
-          const confirmed = await showHarvestConfirmation(confirmDetails);
-          if (!confirmed) {
-            // cancelled
-          } else {
+          if (!biomassVal && avgW && harvestQtyNum > 0) biomassVal = Number(((avgW * harvestQtyNum) / 1000).toFixed(2));
+          const confirmed = await showHarvestConfirmation({ harvestQty: harvestQtyNum, biomassKg: biomassVal, currentLive });
+          if (confirmed) {
             calls.push(fetch(`${apiBaseUrl}/harvests`, {
               method: 'POST',
               headers,
               body: JSON.stringify({
-                pondId: selectedPondId,
+                pondId,
                 numberHarvested: harvestQtyNum,
                 avgWeightGrams: avgW ?? undefined,
                 biomassKg: biomassVal ?? undefined,
@@ -713,7 +981,6 @@ function App() {
         }
       }
     } else if (Number(pondLogForm.harvestQuantity) > 0) {
-      // worker attempted to create harvest — disallow and inform
       setToastMessage('Only owners may record harvests. Contact your manager.');
     }
 
@@ -721,31 +988,25 @@ function App() {
       const settled = await Promise.allSettled(calls);
       const failures = settled.filter((r) => r.status === 'rejected' || (r.status === 'fulfilled' && !r.value.ok));
       if (failures.length > 0) {
-        console.error('Some pond update calls failed, queuing for sync', failures);
-        queueOfflineSyncEntry('pond_update', payload, 'pond_daily_log', selectedPondId);
+        queueOfflineSyncEntry('pond_update', payload, 'pond_daily_log', pondId);
       } else {
         if (Number(pondLogForm.avgWeightGrams) > 0) {
           try {
-            const qRes = await fetch(`${apiBaseUrl}/sync/queue`, {
-              method: 'POST',
-              headers,
-              body: JSON.stringify({ items: [{ action: 'pond_update', payload: { pondId: selectedPondId, avgWeightGrams: Number(pondLogForm.avgWeightGrams), growthComment: pondLogForm.growthComment || undefined } }] }),
-            });
+            const qRes = await fetch(`${apiBaseUrl}/sync/queue`, { method: 'POST', headers, body: JSON.stringify({ items: [{ action: 'pond_update', payload: { pondId, avgWeightGrams: Number(pondLogForm.avgWeightGrams), growthComment: pondLogForm.growthComment || undefined } }] }) });
             if (qRes.ok) {
               const fRes = await fetch(`${apiBaseUrl}/sync/flush`, { method: 'POST', headers });
               if (!fRes.ok) {
-                queueOfflineSyncEntry('pond_update', payload, 'pond_daily_log', selectedPondId);
+                queueOfflineSyncEntry('pond_update', payload, 'pond_daily_log', pondId);
                 resetPondLogForm();
                 return;
               }
             } else {
-              queueOfflineSyncEntry('pond_update', payload, 'pond_daily_log', selectedPondId);
+              queueOfflineSyncEntry('pond_update', payload, 'pond_daily_log', pondId);
               resetPondLogForm();
               return;
             }
           } catch (err) {
-            console.error('Failed to apply growth immediately, queuing', err);
-            queueOfflineSyncEntry('pond_update', payload, 'pond_daily_log', selectedPondId);
+            queueOfflineSyncEntry('pond_update', payload, 'pond_daily_log', pondId);
             resetPondLogForm();
             return;
           }
@@ -753,12 +1014,18 @@ function App() {
 
         resetPondLogForm();
         await loadData();
-        await openPond(selectedPondId);
+        await openPond(pondId);
       }
     } catch (err) {
-      console.error('Pond update failed, queued for later sync', err);
-      queueOfflineSyncEntry('pond_update', payload, 'pond_daily_log', selectedPondId);
+      queueOfflineSyncEntry('pond_update', payload, 'pond_daily_log', pondId);
     }
+  }
+
+  // Enhanced worker pond update: attempt immediate POSTs; if any fail, queue a consolidated pond_update
+  async function handleWorkerPondLogEnhanced(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!token || !selectedPondId) return;
+    await submitPondUpdateForPond(selectedPondId);
   }
 
   const workers = useMemo(() => {
@@ -794,6 +1061,37 @@ function App() {
     ];
   }, [data.farms, workerPasswords, workerRoster]);
 
+  const allChatUsers = useMemo(() => {
+    const list = [...(workers || [])];
+    if (currentUser) {
+      const exists = list.some((worker) => String(worker.id || worker.email || '').toLowerCase() === String(currentUser.id || currentUser.email || '').toLowerCase());
+      if (!exists) {
+        list.push({ id: currentUser.id, name: currentUser.name || currentUser.email.split('@')[0], email: currentUser.email, role: { name: currentUser.role } });
+      }
+    }
+    return list.map((worker) => ({
+      id: String(worker.id || worker.email || Math.random().toString(36).slice(2)),
+      name: String(worker.name || worker.email || 'User').trim() || 'User',
+      email: String(worker.email || '').trim().toLowerCase(),
+      role: String(worker.role?.name || worker.role || 'WORKER').toUpperCase(),
+    }));
+  }, [currentUser, workers]);
+
+  const chatMentionPrefix = useMemo(() => {
+    const match = /(?:^|\s)@([a-zA-Z0-9_.-]*)$/g.exec(chatDraft);
+    if (!match) return '';
+    return (match[1] || '').toLowerCase();
+  }, [chatDraft]);
+
+  const chatMentionSuggestions = useMemo(() => {
+    if (!chatDraft.includes('@')) return [];
+    const term = chatMentionPrefix.trim().toLowerCase();
+    return allChatUsers.filter((user) => {
+      const searchText = `${user.name} ${user.email}`.toLowerCase();
+      return !term || searchText.includes(term);
+    }).slice(0, 8);
+  }, [allChatUsers, chatDraft, chatMentionPrefix]);
+
   const filteredWorkers = useMemo(() => {
     const term = workerSearchTerm.trim().toLowerCase();
     return workers.filter((worker) => {
@@ -818,6 +1116,179 @@ function App() {
     const finance = data.finance || { income: 0, expenses: 0, budget: 0, profit: 0, status: 'PROFIT', profitMargin: 0, budgetUsedPercent: 0 };
     return { totalFeed, totalMortality, lowStock, finance, healthScore: totalMortality > 10 ? 82 : 96, latestFeedSize };
   }, [data]);
+
+  const reportSummary = useMemo(() => {
+    const periodMatches = (value?: string) => {
+      if (!value) return true;
+      const createdAt = new Date(value);
+      if (Number.isNaN(createdAt.getTime())) return true;
+      const now = new Date();
+      const differenceMs = now.getTime() - createdAt.getTime();
+      const dayMs = 24 * 60 * 60 * 1000;
+      const weekMs = 7 * dayMs;
+      const monthMs = 30 * dayMs;
+      const yearMs = 365 * dayMs;
+      if (reportRange === 'daily') return differenceMs <= 2 * dayMs;
+      if (reportRange === 'weekly') return differenceMs <= 2 * weekMs;
+      if (reportRange === 'monthly') return differenceMs <= monthMs;
+      return differenceMs <= yearMs;
+    };
+
+    const financeRecords = data.financeRecords.filter((record) => periodMatches(record.recordedAt || record.createdAt));
+    const harvestRecords = data.harvests.filter((record) => periodMatches(record.recordedAt || record.createdAt));
+    const pondRecords = data.ponds.filter((pond) => periodMatches(pond.stockedAt || pond.createdAt));
+    const sales = financeRecords.filter((record) => record.type === 'INCOME').reduce((sum, record) => sum + Number(record.amount || 0), 0);
+    const runningCosts = financeRecords.filter((record) => record.type === 'EXPENSE').reduce((sum, record) => sum + Number(record.amount || 0), 0);
+    const fixedCosts = financeRecords.filter((record) => record.type === 'BUDGET').reduce((sum, record) => sum + Number(record.amount || 0), 0);
+    const totalMortality = data.mortalityLogs.filter((record) => periodMatches(record.observedAt || record.createdAt)).reduce((sum, record) => sum + Number(record.numberDead || 0), 0);
+    const totalHarvestedFish = harvestRecords.reduce((sum, record) => sum + Number(record.numberHarvested || 0), 0);
+    const totalStock = pondRecords.reduce((sum, pond) => sum + Number(pond.current_population || pond.initial_population || 0), 0);
+    const inventoryValue = data.inventoryItems.reduce((sum, item) => sum + Number(item.currentStock || 0) * (Number(item.unitPrice || 0) || 1), 0);
+    const workerPerformance = workers.map((worker) => {
+      const assignedPonds = data.ponds.filter((pond) => pond.assignedUser?.id === worker.id || pond.assignedUserId === worker.id || pond.assignedUser?.email === worker.email).length;
+      const assignedTasks = data.tasks.filter((task) => task.assignees?.some((assignee: any) => assignee.user?.id === worker.id || assignee.user?.email === worker.email)).length;
+      return {
+        name: worker.name || worker.email || 'Worker',
+        active: !worker.blocked,
+        assignedPonds,
+        assignedTasks,
+      };
+    }).sort((a, b) => (b.assignedPonds + b.assignedTasks) - (a.assignedPonds + a.assignedTasks));
+
+    return {
+      sales,
+      runningCosts,
+      fixedCosts,
+      totalMortality,
+      inventoryValue,
+      totalHarvestedFish,
+      totalStock,
+      activePonds: pondRecords.filter((pond) => Number(pond.current_population || 0) > 0).length,
+      lowStockItems: data.inventoryItems.filter((item) => Number(item.currentStock || 0) <= Number(item.minStock || 0)).length,
+      workerPerformance,
+      recentRows: [...data.financeRecords, ...data.harvests].slice(0, 6),
+    };
+  }, [data, reportRange, workers]);
+
+  const workerReportSummary = useMemo(() => {
+    if (!currentUser || isOwner) return null;
+
+    const myPondIds = new Set(
+      data.ponds
+        .filter((pond) => {
+          const assignedUserId = pond.assignedUserId || pond.assignedUser?.id;
+          const assignedEmail = pond.assignedUser?.email;
+          const assignedName = pond.assignedUser?.name;
+          return assignedUserId === currentUser.id || assignedEmail === currentUser.email || assignedName === currentUser.name;
+        })
+        .map((pond) => pond.id)
+    );
+
+    const myPonds = data.ponds.filter((pond) => myPondIds.has(pond.id));
+    const myFeedEntries = data.feedings.filter((entry) => myPondIds.has(entry.pondId));
+    const myMortalityEntries = data.mortalityLogs.filter((entry) => myPondIds.has(entry.pondId));
+    const myHarvestEntries = data.harvests.filter((entry) => myPondIds.has(entry.pondId));
+    const myTasks = data.tasks.filter((task) =>
+      task.assignees?.some((assignee: any) =>
+        assignee.user?.id === currentUser.id ||
+        assignee.user?.email === currentUser.email ||
+        assignee.user?.name === currentUser.name
+      )
+    );
+
+    const feedLogged = myFeedEntries.reduce((sum, entry) => sum + Number(entry.quantityKg || 0), 0);
+    const mortality = myMortalityEntries.reduce((sum, entry) => sum + Number(entry.numberDead || 0), 0);
+    const harvestedFish = myHarvestEntries.reduce((sum, entry) => sum + Number(entry.numberHarvested || 0), 0);
+    const currentStock = myPonds.reduce((sum, pond) => sum + Number(pond.current_population || pond.initial_population || 0), 0);
+    const recentRows = [
+      ...myFeedEntries.map((entry) => ({
+        id: `feed-${entry.id}`,
+        label: `Feed ${entry.feedSize || 'size'} in pond ${entry.pondId}`,
+        amount: `${Number(entry.quantityKg || 0)} kg`,
+        type: 'Feed',
+        date: entry.createdAt,
+      })),
+      ...myHarvestEntries.map((entry) => ({
+        id: `harvest-${entry.id}`,
+        label: `Harvested fish from pond ${entry.pondId}`,
+        amount: `${Number(entry.numberHarvested || 0)} fish`,
+        type: 'Harvest',
+        date: entry.recordedAt || entry.createdAt,
+      })),
+      ...myTasks.map((task) => ({
+        id: `task-${task.id}`,
+        label: task.title || 'Task update',
+        amount: task.status === 'COMPLETED' ? 'Completed' : 'Pending',
+        type: 'Task',
+        date: task.updatedAt || task.createdAt,
+      })),
+    ].sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime()).slice(0, 6);
+
+    return {
+      assignedPonds: myPonds.length,
+      feedLogged,
+      mortality,
+      tasksAssigned: myTasks.length,
+      tasksPending: myTasks.filter((task) => task.status !== 'COMPLETED').length,
+      tasksCompleted: myTasks.filter((task) => task.status === 'COMPLETED').length,
+      harvestedFish,
+      currentStock,
+      latestFeedSize: [...myFeedEntries].sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())[0]?.feedSize || 'Not recorded',
+      recentRows,
+    };
+  }, [currentUser, data, isOwner]);
+
+  const downloadReportCsv = useCallback(() => {
+    const rows = [
+      ['Period', reportRange],
+      ['Sales', String(reportSummary.sales)],
+      ['Running costs', String(reportSummary.runningCosts)],
+      ['Fixed costs', String(reportSummary.fixedCosts)],
+      ['Mortality', String(reportSummary.totalMortality)],
+      ['Harvested fish', String(reportSummary.totalHarvestedFish)],
+      ['Current pond stock', String(reportSummary.totalStock)],
+      ['Inventory value', String(reportSummary.inventoryValue)],
+      ['Open low stock items', String(reportSummary.lowStockItems)],
+      [''],
+      ['Worker', 'Assigned ponds', 'Assigned tasks', 'Status'],
+      ...reportSummary.workerPerformance.map((worker) => [worker.name, String(worker.assignedPonds), String(worker.assignedTasks), worker.active ? 'Active' : 'Blocked']),
+    ];
+    const csv = rows.map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `aquaculture-report-${reportRange}.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }, [reportRange, reportSummary]);
+
+  const downloadWorkerReportCsv = useCallback(() => {
+    if (!workerReportSummary || !currentUser) return;
+    const rows = [
+      ['Worker', currentUser.name || currentUser.email],
+      ['Period', reportRange],
+      ['Assigned ponds', String(workerReportSummary.assignedPonds)],
+      ['Feed logged (kg)', String(workerReportSummary.feedLogged)],
+      ['Mortality', String(workerReportSummary.mortality)],
+      ['Harvested fish', String(workerReportSummary.harvestedFish)],
+      ['Current stock', String(workerReportSummary.currentStock)],
+      ['Tasks assigned', String(workerReportSummary.tasksAssigned)],
+      ['Tasks pending', String(workerReportSummary.tasksPending)],
+      ['Tasks completed', String(workerReportSummary.tasksCompleted)],
+      [''],
+      ['Activity', 'Type', 'Value', 'Date'],
+      ...workerReportSummary.recentRows.map((row) => [row.label, row.type, row.amount, row.date ? new Date(row.date).toLocaleDateString() : '—']),
+    ];
+    const csv = rows.map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `aquaculture-worker-report-${reportRange}.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }, [currentUser, reportRange, workerReportSummary]);
 
   const getBarTone = (value: number) => {
     if (selectedAnalyticsMetric === 'health') {
@@ -1096,7 +1567,7 @@ function App() {
     }
 
     setAdminActionModal(null);
-    setTargetHarvestAction({ pondId: '', date: '', time: '09:00' });
+    setTargetHarvestAction({ pondId: '', date: '', time: '09:00', quantity: '' });
     setToastMessage('Target harvest date saved.');
     await loadData();
     if (selectedPondId === pondId) await openPond(pondId);
@@ -1835,11 +2306,15 @@ function App() {
   }
 
   function moveSwipeReveal(type: 'finance' | 'worker' | 'inventory' | 'task' | 'pond', id: string, event: React.PointerEvent<HTMLElement>) {
+    if (event.pointerType === 'mouse' && (event.buttons & 1) === 0) return;
+
     const drag = swipeDragRef.current;
     if (!drag || drag.type !== type || drag.id !== id) return;
 
     const deltaX = event.clientX - drag.startX;
-    if (deltaX < -28) {
+    if (Math.abs(deltaX) < 12) return;
+
+    if (deltaX < -32) {
       drag.moved = true;
       swipeGuardRef.current = true;
       setRevealedSwipeAction({ type, id });
@@ -2569,6 +3044,10 @@ function App() {
                 <span>{data.notifications.filter((item) => !item.read).length}</span>
               </button>
             </div>
+            <button type="button" className="secondary-btn theme-toggle-btn" aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} onClick={() => setTheme((value) => value === 'dark' ? 'light' : 'dark')}>
+              {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+              {theme === 'dark' ? 'Light' : 'Dark'}
+            </button>
             <button className="secondary-btn" onClick={() => {
               localStorage.removeItem('aquaculture-token');
               localStorage.removeItem('aquaculture-user');
@@ -2744,6 +3223,265 @@ function App() {
           </>
         ) : null}
 
+        {activeNav === 'reports' ? (
+          <section className="reports-shell">
+            <div className="report-header reveal-card">
+              <div>
+                <p className="eyebrow">{isOwner ? 'Admin reporting' : 'Worker reporting'}</p>
+                <h2>{isOwner ? 'Operational reports' : `${currentUser?.name || 'Worker'} report`}</h2>
+              </div>
+              <div className="range-toggle report-range-toggle" aria-label="Report range selector">
+                {(['daily', 'weekly', 'monthly', 'yearly'] as const).map((range) => (
+                  <button
+                    key={range}
+                    type="button"
+                    className={reportRange === range ? 'range-pill active' : 'range-pill'}
+                    onClick={() => setReportRange(range)}
+                  >
+                    {range.charAt(0).toUpperCase() + range.slice(1)}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {isOwner ? (
+              <>
+                <div className="report-metrics-grid">
+                  <div className="report-metric-card reveal-card" style={{ animationDelay: '40ms' }}>
+                    <span className="metric-label">Sales</span>
+                    <strong>{formatDalasi(reportSummary.sales)}</strong>
+                    <small>Recorded income</small>
+                  </div>
+                  <div className="report-metric-card reveal-card" style={{ animationDelay: '90ms' }}>
+                    <span className="metric-label">Running costs</span>
+                    <strong>{formatDalasi(reportSummary.runningCosts)}</strong>
+                    <small>Operating spend</small>
+                  </div>
+                  <div className="report-metric-card reveal-card" style={{ animationDelay: '140ms' }}>
+                    <span className="metric-label">Fixed costs</span>
+                    <strong>{formatDalasi(reportSummary.fixedCosts)}</strong>
+                    <small>Recurring management cost</small>
+                  </div>
+                  <div className="report-metric-card reveal-card" style={{ animationDelay: '190ms' }}>
+                    <span className="metric-label">Mortality</span>
+                    <strong>{reportSummary.totalMortality}</strong>
+                    <small>Fish lost</small>
+                  </div>
+                  <div className="report-metric-card reveal-card" style={{ animationDelay: '230ms' }}>
+                    <span className="metric-label">Harvested fish</span>
+                    <strong>{reportSummary.totalHarvestedFish}</strong>
+                    <small>Fish recorded</small>
+                  </div>
+                  <div className="report-metric-card reveal-card" style={{ animationDelay: '270ms' }}>
+                    <span className="metric-label">Current stock</span>
+                    <strong>{reportSummary.totalStock}</strong>
+                    <small>Live fish in ponds</small>
+                  </div>
+                  <div className="report-metric-card reveal-card" style={{ animationDelay: '310ms' }}>
+                    <span className="metric-label">Inventory value</span>
+                    <strong>{formatDalasi(reportSummary.inventoryValue)}</strong>
+                    <small>Stock on hand</small>
+                  </div>
+                </div>
+
+                <div className="report-grid">
+                  <Panel eyebrow="Finance" title="Financial overview" className="reveal-card report-panel" style={{ animationDelay: '50ms' }}>
+                    <div className="report-stack">
+                      <div className="report-stat-row"><span>Sales</span><strong>{formatDalasi(reportSummary.sales)}</strong></div>
+                      <div className="report-stat-row"><span>Running costs</span><strong>{formatDalasi(reportSummary.runningCosts)}</strong></div>
+                      <div className="report-stat-row"><span>Fixed costs</span><strong>{formatDalasi(reportSummary.fixedCosts)}</strong></div>
+                      <div className="report-stat-row highlight"><span>Net position</span><strong>{formatDalasi((reportSummary.sales || 0) - (reportSummary.runningCosts || 0) - (reportSummary.fixedCosts || 0))}</strong></div>
+                    </div>
+                  </Panel>
+
+                  <Panel eyebrow="Ponds" title="Pond performance" className="reveal-card report-panel" style={{ animationDelay: '100ms' }}>
+                    <div className="report-stack">
+                      <div className="report-stat-row"><span>Active ponds</span><strong>{reportSummary.activePonds}</strong></div>
+                      <div className="report-stat-row"><span>Mortality</span><strong>{reportSummary.totalMortality} fish</strong></div>
+                      <div className="report-stat-row"><span>Harvested fish</span><strong>{reportSummary.totalHarvestedFish}</strong></div>
+                      <div className="report-stat-row"><span>Current stock</span><strong>{reportSummary.totalStock}</strong></div>
+                      <div className="report-stat-row"><span>Low stock items</span><strong>{reportSummary.lowStockItems}</strong></div>
+                    </div>
+                  </Panel>
+
+                  <Panel eyebrow="Inventory" title="Stock overview" className="reveal-card report-panel" style={{ animationDelay: '150ms' }}>
+                    <div className="report-stack">
+                      <div className="report-stat-row"><span>Inventory value</span><strong>{formatDalasi(reportSummary.inventoryValue)}</strong></div>
+                      <div className="report-stat-row"><span>Stock watch list</span><strong>{reportSummary.lowStockItems}</strong></div>
+                      <div className="report-stat-row"><span>Pond units</span><strong>{data.ponds.length}</strong></div>
+                      <div className="report-stat-row"><span>Feed records</span><strong>{data.feedings.length}</strong></div>
+                    </div>
+                  </Panel>
+
+                  <Panel eyebrow="Workers" title="Worker performance" className="reveal-card report-panel" style={{ animationDelay: '200ms' }}>
+                    <div className="report-worker-list">
+                      {reportSummary.workerPerformance.slice(0, 5).map((worker) => (
+                        <div key={worker.name} className="report-worker-item">
+                          <div>
+                            <strong>{worker.name}</strong>
+                            <span>{worker.active ? 'Active' : 'Blocked'}</span>
+                          </div>
+                          <small>{worker.assignedPonds} ponds · {worker.assignedTasks} tasks</small>
+                        </div>
+                      ))}
+                    </div>
+                  </Panel>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="report-metrics-grid">
+                  <div className="report-metric-card reveal-card" style={{ animationDelay: '40ms' }}>
+                    <span className="metric-label">Assigned ponds</span>
+                    <strong>{workerReportSummary?.assignedPonds ?? 0}</strong>
+                    <small>Current workload</small>
+                  </div>
+                  <div className="report-metric-card reveal-card" style={{ animationDelay: '90ms' }}>
+                    <span className="metric-label">Feed logged</span>
+                    <strong>{workerReportSummary ? `${workerReportSummary.feedLogged} kg` : '0 kg'}</strong>
+                    <small>Latest size: {workerReportSummary?.latestFeedSize || 'Not recorded'}</small>
+                  </div>
+                  <div className="report-metric-card reveal-card" style={{ animationDelay: '140ms' }}>
+                    <span className="metric-label">Mortality</span>
+                    <strong>{workerReportSummary?.mortality ?? 0}</strong>
+                    <small>Fish lost</small>
+                  </div>
+                  <div className="report-metric-card reveal-card" style={{ animationDelay: '190ms' }}>
+                    <span className="metric-label">Harvested fish</span>
+                    <strong>{workerReportSummary?.harvestedFish ?? 0}</strong>
+                    <small>Across your ponds</small>
+                  </div>
+                  <div className="report-metric-card reveal-card" style={{ animationDelay: '240ms' }}>
+                    <span className="metric-label">Current stock</span>
+                    <strong>{workerReportSummary?.currentStock ?? 0}</strong>
+                    <small>Live fish in assigned ponds</small>
+                  </div>
+                  <div className="report-metric-card reveal-card" style={{ animationDelay: '290ms' }}>
+                    <span className="metric-label">Tasks</span>
+                    <strong>{workerReportSummary?.tasksAssigned ?? 0}</strong>
+                    <small>{workerReportSummary ? `${workerReportSummary.tasksPending} pending / ${workerReportSummary.tasksCompleted} complete` : '0 pending / 0 complete'}</small>
+                  </div>
+                </div>
+
+                <div className="report-grid">
+                  <Panel eyebrow="My ponds" title="Pond workload" className="reveal-card report-panel" style={{ animationDelay: '50ms' }}>
+                    <div className="report-stack">
+                      <div className="report-stat-row"><span>Assigned ponds</span><strong>{workerReportSummary?.assignedPonds ?? 0}</strong></div>
+                      <div className="report-stat-row"><span>Feed logged</span><strong>{workerReportSummary ? `${workerReportSummary.feedLogged} kg` : '0 kg'}</strong></div>
+                      <div className="report-stat-row"><span>Current stock</span><strong>{workerReportSummary?.currentStock ?? 0}</strong></div>
+                      <div className="report-stat-row highlight"><span>Mortality</span><strong>{workerReportSummary?.mortality ?? 0}</strong></div>
+                    </div>
+                  </Panel>
+
+                  <Panel eyebrow="Tasks" title="Task performance" className="reveal-card report-panel" style={{ animationDelay: '100ms' }}>
+                    <div className="report-stack">
+                      <div className="report-stat-row"><span>Assigned tasks</span><strong>{workerReportSummary?.tasksAssigned ?? 0}</strong></div>
+                      <div className="report-stat-row"><span>Pending</span><strong>{workerReportSummary?.tasksPending ?? 0}</strong></div>
+                      <div className="report-stat-row"><span>Completed</span><strong>{workerReportSummary?.tasksCompleted ?? 0}</strong></div>
+                      <div className="report-stat-row"><span>Harvested fish</span><strong>{workerReportSummary?.harvestedFish ?? 0}</strong></div>
+                    </div>
+                  </Panel>
+
+                  <Panel eyebrow="Operations" title="Daily execution" className="reveal-card report-panel" style={{ animationDelay: '150ms' }}>
+                    <div className="report-stack">
+                      <div className="report-stat-row"><span>Latest feed size</span><strong>{workerReportSummary?.latestFeedSize || 'Not recorded'}</strong></div>
+                      <div className="report-stat-row"><span>Feed logged</span><strong>{workerReportSummary ? `${workerReportSummary.feedLogged} kg` : '0 kg'}</strong></div>
+                      <div className="report-stat-row"><span>Fish lost</span><strong>{workerReportSummary?.mortality ?? 0}</strong></div>
+                      <div className="report-stat-row"><span>Harvest count</span><strong>{workerReportSummary?.harvestedFish ?? 0}</strong></div>
+                    </div>
+                  </Panel>
+
+                  <Panel eyebrow="Activity" title="Recent worker log" className="reveal-card report-panel" style={{ animationDelay: '200ms' }}>
+                    <div className="report-worker-list">
+                      {(workerReportSummary?.recentRows ?? []).length === 0 ? (
+                        <div className="report-worker-item"><div><strong>No activity yet</strong><span>Logs appear here</span></div></div>
+                      ) : (
+                        workerReportSummary?.recentRows.map((row) => (
+                          <div key={row.id} className="report-worker-item">
+                            <div>
+                              <strong>{row.label}</strong>
+                              <span>{row.type}</span>
+                            </div>
+                            <small>{row.amount}</small>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </Panel>
+                </div>
+              </>
+            )}
+
+            {isOwner ? (
+              <Panel eyebrow="Long-form ledger" title="Permanent report records" className="reveal-card report-table-panel" style={{ animationDelay: '250ms' }}>
+                <div className="report-table-wrapper">
+                  <table className="report-table">
+                    <thead>
+                      <tr>
+                        <th>Record</th>
+                        <th>Type</th>
+                        <th>Amount</th>
+                        <th>Date</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {reportSummary.recentRows.length === 0 ? (
+                        <tr><td colSpan={4}>No report records available yet.</td></tr>
+                      ) : (
+                        reportSummary.recentRows.map((row: any) => (
+                          <tr key={row.id || `${row.type || 'record'}-${row.recordedAt || row.createdAt || Math.random()}`}>
+                            <td>{row.description || row.method || row.type || `Pond ${row.number || row.pondId || ''}`}</td>
+                            <td>{row.type || row.numberHarvested ? 'Harvest' : 'Operating record'}</td>
+                            <td>{row.amount ? formatDalasi(Number(row.amount)) : row.numberHarvested ? `${row.numberHarvested} fish` : '—'}</td>
+                            <td>{row.recordedAt || row.createdAt ? new Date(row.recordedAt || row.createdAt).toLocaleDateString() : '—'}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="report-footer-actions">
+                  <button type="button" className="secondary-btn" onClick={() => window.print()}>Print</button>
+                  <button type="button" className="primary-btn" onClick={downloadReportCsv}>Download CSV</button>
+                </div>
+              </Panel>
+            ) : (
+              <Panel eyebrow="Worker activity" title="My recent operational log" className="reveal-card report-table-panel" style={{ animationDelay: '250ms' }}>
+                <div className="report-table-wrapper">
+                  <table className="report-table">
+                    <thead>
+                      <tr>
+                        <th>Activity</th>
+                        <th>Type</th>
+                        <th>Value</th>
+                        <th>Date</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(workerReportSummary?.recentRows ?? []).length === 0 ? (
+                        <tr><td colSpan={4}>No worker activity recorded yet.</td></tr>
+                      ) : (
+                        (workerReportSummary?.recentRows ?? []).map((row) => (
+                          <tr key={row.id}>
+                            <td>{row.label}</td>
+                            <td>{row.type}</td>
+                            <td>{row.amount}</td>
+                            <td>{row.date ? new Date(row.date).toLocaleDateString() : '—'}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="report-footer-actions">
+                  <button type="button" className="secondary-btn" onClick={() => window.print()}>Print</button>
+                  <button type="button" className="primary-btn" onClick={downloadWorkerReportCsv}>Download summary</button>
+                </div>
+              </Panel>
+            )}
+          </section>
+        ) : null}
+
         {activeNav === 'ponds' ? (
           <section className="dashboard-grid wide-left">
             <Panel eyebrow={isOwner ? 'Admin pond management' : 'Assigned ponds'} title="Pond registry">
@@ -2846,92 +3584,175 @@ function App() {
                     onPointerMove={(event) => moveSwipeReveal('pond', pond.id, event)}
                     onPointerUp={endSwipeReveal}
                     onPointerLeave={endSwipeReveal}
-                  >
-                    <div className="swipe-delete-action">
-                      <button
-                        type="button"
-                        className="danger-btn"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          showDeleteConfirmation('pond', pond.id, `Pond ${pond.number}`);
-                        }}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                    <button
-                      className={`pond-card pond-button ${!isOwner ? 'compact' : ''}`}
-                      onClick={(event) => {
-                        if (swipeGuardRef.current) {
-                          swipeGuardRef.current = false;
-                          return;
-                        }
-                        event.stopPropagation();
-                        openPond(pond.id);
-                      }}
-                      onDoubleClick={() => openPond(pond.id)}
-                    >
-                      <div><strong>Pond {pond.number}</strong><span>{pond.site?.name || 'Main site'} | {pond.assignedUser?.name || 'Unassigned'}</span></div>
-                      <div className="pond-stats">
-                        <span>{titleCase(pond.species || 'Fish')}</span>
-                        <span>{pond.current_population || 0} fish</span>
-                        <span>Open</span>
-                      </div>
-                    </button>
-                  </div>
-                ))}
+                                  onDoubleClick={isOwner ? ((e) => {
+                                    // Double-click to reveal delete on desktop only
+                                    try {
+                                      if (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(pointer: coarse)').matches) return;
+                                    } catch (err) { }
+                                    e.stopPropagation();
+                                    setRevealedSwipeAction((current) => (current && current.type === 'pond' && current.id === pond.id) ? null : { type: 'pond', id: pond.id });
+                                  }) : undefined}
+                                >
+                                  {isOwner ? (
+                                    <div className="swipe-delete-action">
+                                      <button
+                                        type="button"
+                                        className="danger-btn"
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          showDeleteConfirmation('pond', pond.id, `Pond ${pond.number}`);
+                                        }}
+                                      >
+                                        Delete
+                                      </button>
+                                    </div>
+                                  ) : null}
+
+                                  <button
+                                    className={`pond-card pond-button ${!isOwner ? 'compact' : ''}`}
+                                    onClick={(event) => {
+                                      if (swipeGuardRef.current) {
+                                        swipeGuardRef.current = false;
+                                        return;
+                                      }
+                                      event.stopPropagation();
+                                      openPond(pond.id);
+                                    }}
+                                  >
+                                    <div><strong>Pond {pond.number}</strong><span>{pond.site?.name || 'Main site'} | {pond.assignedUser?.name || 'Unassigned'}</span></div>
+                                    <div className="pond-stats">
+                                      <span>{titleCase(pond.species || 'Fish')}</span>
+                                      <span>{pond.current_population || 0} fish</span>
+                                    </div>
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+            </Panel>
+            <Panel eyebrow="Admin tools" title="Quick actions">
+              <div className="admin-action-grid">
+                <button type="button" className="admin-action-card" onClick={() => { setQuickPondUpdateOpen(true); setAdminPondQuickUpdateId((current) => current || selectedPondId || data.ponds[0]?.id || ''); }}>
+                  <span>Update pond</span>
+                </button>
+                <button type="button" className="admin-action-card" onClick={() => { setAdminActionModal({ type: 'restock' }); setAdminPondQuickUpdateId((current) => current || selectedPondId || data.ponds[0]?.id || ''); }}>
+                  <span>Restock</span>
+                </button>
+                <button type="button" className="admin-action-card" onClick={() => { setAdminActionModal({ type: 'targetHarvest' }); setTargetHarvestAction((current) => ({ ...current, pondId: current.pondId || selectedPondId || data.ponds[0]?.id || '' })); }}>
+                  <span>Set target harvest</span>
+                </button>
+                <button type="button" className="admin-action-card" onClick={() => { setAdminActionModal({ type: 'harvestQuantity' }); setHarvestQuantityAction((current) => ({ ...current, pondId: current.pondId || selectedPondId || data.ponds[0]?.id || '' })); }}>
+                  <span>Harvest quantity</span>
+                </button>
+                <button type="button" className="admin-action-card" onClick={() => { setAdminActionModal({ type: 'recommendFeed' }); setRecommendFeedAction((current) => ({ ...current, pondId: current.pondId || selectedPondId || data.ponds[0]?.id || '' })); }}>
+                  <span>Recommend feed</span>
+                </button>
+                <button type="button" className="admin-action-card" onClick={() => { setAdminActionModal({ type: 'mortality' }); setMortalityAction((current) => ({ ...current, pondId: current.pondId || selectedPondId || data.ponds[0]?.id || '' })); }}>
+                  <span>Record mortality</span>
+                </button>
               </div>
             </Panel>
-            {isOwner ? (
-              <Panel eyebrow="Admin tools" title="Quick actions">
-                <div className="admin-action-grid">
-                   <form
-                     className="quick-pond-update-card worker-modal"
-                     onSubmit={async (event) => {
-                       event.preventDefault();
-                       if (!adminPondQuickUpdateId) {
-                         setToastMessage('Choose a pond first');
-                         return;
-                       }
-                       setSelectedPondId(adminPondQuickUpdateId);
-                       await openPond(adminPondQuickUpdateId);
-                       setActiveNav('ponds');
-                     }}
-                   >
-                     <h3>Quick pond update</h3>
-                     <div className="worker-create-form">
-                       <label className="worker-field full-width">
-                         <span>Select pond</span>
-                         <select value={adminPondQuickUpdateId} onChange={(event) => setAdminPondQuickUpdateId(event.target.value)}>
-                           <option value="">Choose a pond</option>
-                           {data.ponds.map((pond) => (
-                             <option key={pond.id} value={pond.id}>Pond {pond.number} · {pond.site?.name || 'Main site'}</option>
-                           ))}
-                         </select>
-                       </label>
-                       <div className="worker-form-footer full-width">
-                         <button type="submit" className="primary-btn compact-btn">Open pond update form</button>
-                       </div>
-                     </div>
-                   </form>
-                  <button type="button" className="admin-action-card" onClick={() => { setAdminActionModal({ type: 'targetHarvest' }); setTargetHarvestAction((current) => ({ ...current, pondId: current.pondId || selectedPondId || data.ponds[0]?.id || '' })); }}>
-                    <span>Set target harvest</span>
-                  </button>
-                  <button type="button" className="admin-action-card" onClick={() => { setAdminActionModal({ type: 'recommendFeed' }); setRecommendFeedAction((current) => ({ ...current, pondId: current.pondId || selectedPondId || data.ponds[0]?.id || '' })); }}>
-                    <span>Recommend feed</span>
-                  </button>
-                  <button type="button" className="admin-action-card" onClick={() => { setAdminActionModal({ type: 'mortality' }); setMortalityAction((current) => ({ ...current, pondId: current.pondId || selectedPondId || data.ponds[0]?.id || '' })); }}>
-                    <span>Record mortality</span>
-                  </button>
+
+            {quickPondUpdateOpen ? (
+              <div className="modal-backdrop" onClick={() => setQuickPondUpdateOpen(false)}>
+                <div className="modal worker-modal admin-action-modal" onClick={(event) => event.stopPropagation()}>
+                  <h3>Update pond</h3>
+                  <form
+                    className="worker-create-form"
+                    onSubmit={async (event) => {
+                      event.preventDefault();
+                      if (!adminPondQuickUpdateId) {
+                        setToastMessage('Choose a pond first');
+                        return;
+                      }
+                      setSelectedPondId(adminPondQuickUpdateId);
+                      setQuickPondUpdateOpen(false);
+                      await openPond(adminPondQuickUpdateId);
+                      setActiveNav('ponds');
+                      await submitPondUpdateForPond(adminPondQuickUpdateId);
+                    }}
+                  >
+                    <label className="worker-field full-width">
+                      <span>Select pond</span>
+                      <select value={adminPondQuickUpdateId} onChange={(event) => setAdminPondQuickUpdateId(event.target.value)}>
+                        <option value="">Choose a pond</option>
+                        {data.ponds.map((pond) => (
+                          <option key={pond.id} value={pond.id}>Pond {pond.number} · {pond.site?.name || 'Main site'}</option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <div className="quick-update-form-grid">
+                      <select value={pondLogForm.feedSize || '4mm'} onChange={(event) => setPondLogForm((current) => ({ ...current, feedSize: event.target.value }))}>
+                        <option value="1mm">1mm</option>
+                        <option value="1.5mm">1.5mm</option>
+                        <option value="2mm">2mm</option>
+                        <option value="2.5mm">2.5mm</option>
+                        <option value="3mm">3mm</option>
+                        <option value="3.5mm">3.5mm</option>
+                        <option value="4mm">4mm</option>
+                        <option value="4.5mm">4.5mm</option>
+                      </select>
+
+                      <select value={pondLogForm.inventoryItemId || ''} onChange={(event) => setPondLogForm((current) => ({ ...current, inventoryItemId: event.target.value }))}>
+                        <option value="">Feed stock item (optional)</option>
+                        {data.inventoryItems.filter((item) => String(item.category || '').toUpperCase().includes('FEED') || String(item.name || '').toLowerCase().includes('feed')).map((item) => (
+                          <option key={item.id} value={item.id}>{item.name}</option>
+                        ))}
+                      </select>
+
+                      <input type="number" min="0" step="10" placeholder="Feed grams" value={pondLogForm.feedGrams} onChange={(event) => setPondLogForm((current) => ({ ...current, feedGrams: event.target.value, feedKg: event.target.value ? (Number(event.target.value) / 1000).toFixed(3) : '' }))} />
+
+                      <select value={pondLogForm.appetite} onChange={(event) => setPondLogForm((current) => ({ ...current, appetite: event.target.value }))}>
+                        <option value="5">Appetite 5 - excellent</option>
+                        <option value="4">Appetite 4 - good</option>
+                        <option value="3">Appetite 3 - fair</option>
+                        <option value="2">Appetite 2 - poor</option>
+                        <option value="1">Appetite 1 - very poor</option>
+                      </select>
+
+                      <input placeholder="Normal" value={pondLogForm.behavior} onChange={(event) => setPondLogForm((current) => ({ ...current, behavior: event.target.value }))} />
+                      <input placeholder="pH" value={pondLogForm.ph} onChange={(event) => setPondLogForm((current) => ({ ...current, ph: event.target.value }))} />
+                      <input placeholder="Dissolved oxygen" value={pondLogForm.dissolvedO2} onChange={(event) => setPondLogForm((current) => ({ ...current, dissolvedO2: event.target.value }))} />
+                      <input placeholder="Ammonia" value={pondLogForm.ammonia} onChange={(event) => setPondLogForm((current) => ({ ...current, ammonia: event.target.value }))} />
+                      <input placeholder="Water added %" value={pondLogForm.waterAddedPercent} onChange={(event) => setPondLogForm((current) => ({ ...current, waterAddedPercent: event.target.value }))} />
+                      <input placeholder="Water removed %" value={pondLogForm.waterRemovedPercent} onChange={(event) => setPondLogForm((current) => ({ ...current, waterRemovedPercent: event.target.value }))} />
+                      <input placeholder="0" value={pondLogForm.mortality} onChange={(event) => setPondLogForm((current) => ({ ...current, mortality: event.target.value }))} />
+                      <input placeholder="Mortality cause" value={pondLogForm.mortalityCause} onChange={(event) => setPondLogForm((current) => ({ ...current, mortalityCause: event.target.value }))} />
+                      <input type="number" min="0" step="1" placeholder="Average weight (g)" value={pondLogForm.avgWeightGrams} onChange={(event) => setPondLogForm((current) => ({ ...current, avgWeightGrams: event.target.value }))} />
+                      <input placeholder="Growth note" value={pondLogForm.growthComment} onChange={(event) => setPondLogForm((current) => ({ ...current, growthComment: event.target.value }))} />
+                      <textarea placeholder="Water or behavior note" value={pondLogForm.waterComment} onChange={(event) => setPondLogForm((current) => ({ ...current, waterComment: event.target.value }))} />
+                    </div>
+
+                    <div className="quick-update-actions">
+                      <button type="button" className="secondary-btn" onClick={() => setQuickPondUpdateOpen(false)}>Cancel</button>
+                      <button type="submit" className="primary-btn">Submit pond update</button>
+                    </div>
+                  </form>
                 </div>
-              </Panel>
+              </div>
             ) : null}
+
             {adminActionModal ? (
               <div className="modal-backdrop" onClick={() => setAdminActionModal(null)}>
                 <div className="modal worker-modal admin-action-modal" onClick={(event) => event.stopPropagation()}>
-                  <h3>{adminActionModal.type === 'targetHarvest' ? 'Set target harvest' : adminActionModal.type === 'recommendFeed' ? 'Recommend feed' : 'Record mortality'}</h3>
+                  <h3>{adminActionModal.type === 'targetHarvest' ? 'Set target harvest' : adminActionModal.type === 'harvestQuantity' ? 'Harvest quantity' : adminActionModal.type === 'recommendFeed' ? 'Recommend feed' : adminActionModal.type === 'mortality' ? 'Record mortality' : adminActionModal.type === 'restock' ? 'Restock pond' : ''}</h3>
                   {adminActionModal.type === 'targetHarvest' ? (
-                    <form className="worker-create-form" onSubmit={handleTargetHarvestActionSubmit}>
+                    <form className="worker-create-form" onSubmit={async (event) => {
+                      event.preventDefault();
+                      const pondId = targetHarvestAction.pondId || selectedPondId || '';
+                      const qty = Number((targetHarvestAction as any).quantity || 0);
+                      if (!pondId || !targetHarvestAction.date) { setToastMessage('Choose a pond and date'); return; }
+                      if (!Number.isInteger(qty) || qty <= 0) { setToastMessage('Enter a positive whole number for harvest quantity'); return; }
+                      if (!token) { setToastMessage('Not authorized'); return; }
+                      try {
+                        const timestamp = new Date(`${targetHarvestAction.date}T${targetHarvestAction.time || '09:00'}`);
+                        const body: any = { targetHarvestDate: timestamp.toISOString(), targetHarvestQuantity: qty };
+                        const r = await fetch(`${apiBaseUrl}/ponds/${pondId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' }, body: JSON.stringify(body) });
+                        if (r.ok) { setToastMessage('Target harvest set'); setAdminActionModal(null); await loadData(); } else { const txt = await r.text().catch(() => ''); let parsed; try { parsed = JSON.parse(txt || '{}'); } catch { parsed = { error: txt || r.statusText }; } setToastMessage(parsed.error || parsed.message || `Server error ${r.status}`); }
+                      } catch (err) {
+                        setToastMessage('Failed to set target harvest');
+                      }
+                    }}>
                       <label className="worker-field full-width">
                         <span>Available pond</span>
                         <select value={targetHarvestAction.pondId} onChange={(event) => setTargetHarvestAction({ ...targetHarvestAction, pondId: event.target.value })} required>
@@ -2950,10 +3771,96 @@ function App() {
                           <span>Time</span>
                           <input type="time" value={targetHarvestAction.time} onChange={(event) => setTargetHarvestAction({ ...targetHarvestAction, time: event.target.value })} required />
                         </label>
+                        <label className="worker-field">
+                          <span>Harvest qty</span>
+                          <input type="number" min="1" step="1" value={(targetHarvestAction as any).quantity || ''} onChange={(event) => setTargetHarvestAction({ ...targetHarvestAction, quantity: event.target.value })} placeholder="Number of fish" />
+                        </label>
                       </div>
                       <div className="modal-actions compact-actions">
                         <button type="button" className="secondary-btn" onClick={() => setAdminActionModal(null)}>Cancel</button>
-                        <button type="submit" className="primary-btn">Set date</button>
+                        <button type="submit" className="primary-btn">Set target</button>
+                      </div>
+                    </form>
+                  ) : null}
+
+                  {adminActionModal.type === 'harvestQuantity' ? (
+                    <form className="worker-create-form" onSubmit={async (event) => {
+                      event.preventDefault();
+                      const pondId = harvestQuantityAction.pondId || selectedPondId || '';
+                      const qty = Number(harvestQuantityAction.quantity || 0);
+                      if (!pondId) {
+                        setToastMessage('Choose a pond before recording harvest.');
+                        return;
+                      }
+                      if (!Number.isInteger(qty) || qty <= 0) {
+                        setToastMessage('Enter a valid harvest quantity in whole fish.');
+                        return;
+                      }
+
+                      try {
+                        const body = {
+                          pondId,
+                          numberHarvested: qty,
+                          avgWeightGrams: harvestQuantityAction.avgWeightGrams ? Number(harvestQuantityAction.avgWeightGrams) : undefined,
+                          biomassKg: harvestQuantityAction.biomassKg ? Number(harvestQuantityAction.biomassKg) : undefined,
+                          method: harvestQuantityAction.method || undefined,
+                          destination: harvestQuantityAction.destination || undefined,
+                        };
+                        const response = await fetch(`${apiBaseUrl}/harvests`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' },
+                          body: JSON.stringify(body),
+                        });
+                        const responseBody = await response.json().catch(() => ({}));
+                        if (!response.ok) {
+                          setToastMessage(responseBody.error || responseBody.message || `Server error ${response.status}`);
+                          return;
+                        }
+                        setToastMessage(`${qty} fish recorded.`);
+                        setAdminActionModal(null);
+                        setHarvestQuantityAction({ pondId: '', quantity: '', avgWeightGrams: '', biomassKg: '', method: '', destination: '' });
+                        await loadData();
+                        if (selectedPondId === pondId) await openPond(pondId);
+                      } catch (err) {
+                        setToastMessage('Failed to record harvest quantity.');
+                      }
+                    }}>
+                      <label className="worker-field full-width">
+                        <span>Available pond</span>
+                        <select value={harvestQuantityAction.pondId} onChange={(event) => setHarvestQuantityAction({ ...harvestQuantityAction, pondId: event.target.value })} required>
+                          <option value="">Select a pond</option>
+                          {data.ponds.map((pond) => (
+                            <option key={pond.id} value={pond.id}>Pond {pond.number} · {pond.site?.name || 'Main site'}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <div className="inline-fields">
+                        <label className="worker-field">
+                          <span>Harvest qty</span>
+                          <input type="number" min="1" step="1" value={harvestQuantityAction.quantity} onChange={(event) => setHarvestQuantityAction({ ...harvestQuantityAction, quantity: event.target.value })} placeholder="Number of fish" required />
+                        </label>
+                        <label className="worker-field">
+                          <span>Avg weight (g)</span>
+                          <input type="number" min="0" step="0.1" value={harvestQuantityAction.avgWeightGrams} onChange={(event) => setHarvestQuantityAction({ ...harvestQuantityAction, avgWeightGrams: event.target.value })} placeholder="Avg weight" />
+                        </label>
+                      </div>
+                      <div className="inline-fields">
+                        <label className="worker-field">
+                          <span>Biomass (kg)</span>
+                          <input type="number" min="0" step="0.1" value={harvestQuantityAction.biomassKg} onChange={(event) => setHarvestQuantityAction({ ...harvestQuantityAction, biomassKg: event.target.value })} placeholder="Biomass" />
+                        </label>
+                        <label className="worker-field">
+                          <span>Method</span>
+                          <input value={harvestQuantityAction.method} onChange={(event) => setHarvestQuantityAction({ ...harvestQuantityAction, method: event.target.value })} placeholder="Net / drag" />
+                        </label>
+                      </div>
+                      <label className="worker-field full-width">
+                        <span>Destination</span>
+                        <input value={harvestQuantityAction.destination} onChange={(event) => setHarvestQuantityAction({ ...harvestQuantityAction, destination: event.target.value })} placeholder="Market / farm" />
+                      </label>
+                      <div className="modal-actions compact-actions">
+                        <button type="button" className="secondary-btn" onClick={() => setAdminActionModal(null)}>Cancel</button>
+                        <button type="submit" className="primary-btn">Save harvest</button>
                       </div>
                     </form>
                   ) : null}
@@ -2996,6 +3903,41 @@ function App() {
                         <button type="submit" className="primary-btn">Recommend</button>
                       </div>
                     </form>
+                  ) : null}
+
+                  {adminActionModal.type === 'restock' ? (
+                    <form className="worker-create-form" onSubmit={async (e) => {
+                      e.preventDefault();
+                      const sel = adminPondQuickUpdateId || '';
+                      const q = Number(adminRestockQty);
+                      if (!sel) { setToastMessage('Choose a pond'); return; }
+                      if (!Number.isInteger(q) || q <= 0) { setToastMessage('Enter a positive whole number to restock'); return; }
+                      try {
+                        const current = Number((data.ponds.find(p => p.id === sel)?.current_population) || 0);
+                        const initial = Number((data.ponds.find(p => p.id === sel)?.initial_population) || 0);
+                        const response = await fetch(`${apiBaseUrl}/ponds/${sel}`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' }, body: JSON.stringify({ current_population: current + q, initial_population: initial + q }) });
+                        if (response.ok) { setToastMessage(`Restocked ${q} fish`); setAdminRestockQty(''); setAdminActionModal(null); await loadData(); } else { const body = await response.text().catch(()=>''); let parsed; try { parsed = JSON.parse(body || '{}'); } catch { parsed = { error: body || response.statusText }; } setToastMessage(parsed.error || parsed.message || `Server error ${response.status}`); }
+                      } catch (err) { setToastMessage('Failed to restock pond'); }
+                    }}>
+                      <label className="worker-field full-width">
+                        <span>Available pond</span>
+                        <select value={adminPondQuickUpdateId} onChange={(event) => setAdminPondQuickUpdateId(event.target.value)}>
+                          <option value="">Choose a pond</option>
+                          {data.ponds.map((pond) => (
+                            <option key={pond.id} value={pond.id}>Pond {pond.number} · {pond.site?.name || 'Main site'}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="worker-field full-width">
+                        <span>Restock qty</span>
+                        <input type="number" min="1" step="1" value={adminRestockQty} onChange={(e) => setAdminRestockQty(e.target.value)} />
+                      </label>
+                      <div className="modal-actions compact-actions">
+                        <button type="button" className="secondary-btn" onClick={() => setAdminActionModal(null)}>Cancel</button>
+                        <button type="submit" className="primary-btn">Restock</button>
+                      </div>
+                    </form>
+
                   ) : null}
 
                   {adminActionModal.type === 'mortality' ? (
@@ -3246,6 +4188,14 @@ function App() {
                         onPointerMove={(event) => moveSwipeReveal('worker', worker.id, event)}
                         onPointerUp={endSwipeReveal}
                         onPointerLeave={endSwipeReveal}
+                        onDoubleClick={(e) => {
+                          // Only toggle reveal via double-click on non-touch (desktop) devices
+                          try {
+                            if (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(pointer: coarse)').matches) return;
+                          } catch (err) { }
+                          e.stopPropagation();
+                          setRevealedSwipeAction((current) => (current && current.type === 'worker' && current.id === worker.id) ? null : { type: 'worker', id: worker.id });
+                        }}
                       >
                         <div className="swipe-delete-action">
                           <button
@@ -3434,7 +4384,7 @@ function App() {
                 </div>
 
                 {showFinanceForm ? (
-                  <form className="finance-form" onSubmit={handleCreateFinanceRecord}>
+                  <form className="finance-form finance-form-popup" onSubmit={handleCreateFinanceRecord}>
                     <select value={financeForm.type} onChange={(event) => setFinanceForm({ ...financeForm, type: event.target.value })}>
                       <option value="EXPENSE">Running Cost</option>
                       <option value="INCOME">Sales</option>
@@ -3478,6 +4428,7 @@ function App() {
                 />
               </Panel>
             </section>
+
           </>
         ) : null}
 
@@ -3637,6 +4588,146 @@ function App() {
 
       </main>
 
+     {currentUser ? (
+       <>
+         <button type="button" className="floating-chat-toggle" onClick={() => setChatOpen((value) => !value)} aria-label="Toggle global chat">
+           <MessageSquare size={18} />
+           <span>Chat</span>
+         </button>
+
+         {chatOpen ? (
+           <div className="floating-chat-panel" role="dialog" aria-modal="false">
+             <div className="floating-chat-header">
+               <div>
+                 <strong>Global chat</strong>
+                 <span>All users</span>
+               </div>
+               <div className="floating-chat-header-actions">
+                 <button type="button" className="secondary-btn compact-btn chat-clear-btn" onClick={handleClearChatMessages}>{currentUser?.role === 'OWNER' ? 'Clear chat' : 'Clear my chat'}</button>
+                 <button type="button" className="secondary-btn compact-btn" onClick={() => setChatOpen(false)}>Close</button>
+               </div>
+             </div>
+
+             <div className="floating-chat-list" ref={chatListRef}>
+               {chatMessages.length === 0 ? (
+                 <p className="empty-copy">No messages yet. Start the conversation.</p>
+               ) : (
+                 <>
+                   <div className="chat-thread-marker">Recent</div>
+                   {chatMessages.map((message) => {
+                     const isMine = message.senderId === currentUser.id;
+                     const canDelete = isMine;
+                     const isRevealed = revealedChatId === message.id;
+                     const actionClass = isRevealed && chatRevealDirection === 'right' ? 'reveal-right' : isRevealed && chatRevealDirection === 'left' ? 'reveal-left' : '';
+                     return (
+                       <div key={message.id} className={isRevealed ? `chat-swipe-shell ${actionClass}` : 'chat-swipe-shell'}>
+                         <div className="chat-swipe-action reply-action">
+                           <button type="button" className="secondary-btn compact-btn" onClick={() => setChatReplyTargetId(message.id)}>Reply</button>
+                         </div>
+                         <div
+                           className={isMine ? 'chat-message-row mine' : 'chat-message-row'}
+                           onPointerDown={(event) => handleChatSwipeStart(message.id, event)}
+                           onPointerMove={(event) => handleChatSwipeMove(message.id, event)}
+                           onPointerUp={handleChatSwipeEnd}
+                           onPointerLeave={handleChatSwipeEnd}
+                           style={{ touchAction: 'pan-y' }}
+                         >
+                           <div className="chat-message-header">
+                             <strong>{message.senderName}</strong>
+                             <span>{message.senderRole === 'OWNER' ? 'Admin' : 'Worker'}</span>
+                           </div>
+                           {message.text ? <p>{message.text.split(/(@[A-Za-z0-9_.-]+)/g).map((part, index) => part.startsWith('@') ? <mark key={`${message.id}-${index}`} className="chat-mention-highlight">{part}</mark> : <span key={`${message.id}-${index}`}>{part}</span>)}</p> : null}
+                           {message.imageUrl ? (
+                             <div className="chat-message-image-wrap">
+                               <img src={message.imageUrl} alt="Shared chat attachment" />
+                             </div>
+                           ) : null}
+                           <div className="chat-message-meta">
+                             <small>{new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</small>
+                             <small className="chat-swipe-hint">Swipe</small>
+                           </div>
+                         </div>
+                         {canDelete ? (
+                           <div className="chat-swipe-action delete-action">
+                             <button type="button" className="danger-btn" onClick={() => setChatDeleteChoiceId((current) => current === message.id ? null : message.id)}>Delete</button>
+                           </div>
+                         ) : null}
+                       </div>
+                     );
+                   })}
+                 </>
+               )}
+             </div>
+
+                 {chatDeleteChoiceId ? (() => {
+                   const message = chatMessages.find((item) => item.id === chatDeleteChoiceId);
+                   return message ? (
+                     <div className="chat-delete-choice">
+                       <span>Delete this message?</span>
+                       <div className="chat-delete-choice-actions">
+                         <button type="button" className="secondary-btn compact-btn" onClick={() => { setChatDeleteChoiceId(null); }}>Cancel</button>
+                         <button type="button" className="secondary-btn compact-btn" onClick={() => { void handleDeleteChatMessage(message.id, 'mine'); }}>For me</button>
+                         <button type="button" className="danger-btn compact-btn" onClick={() => { void handleDeleteChatMessage(message.id, 'all'); }}>For everyone</button>
+                       </div>
+                     </div>
+                   ) : null;
+                 })() : null}
+
+                 {chatMentionSuggestions.length > 0 ? (
+                   <div className="chat-mention-suggestions">
+                     {chatMentionSuggestions.map((user) => (
+                       <button key={user.id} type="button" className="chat-mention-item" onClick={() => handleChatMentionSelect(user)}>
+                         @{user.name}
+                       </button>
+                     ))}
+                   </div>
+                 ) : null}
+
+                 {chatReplyTargetId ? (() => {
+                   const replyTarget = chatMessages.find((message) => message.id === chatReplyTargetId);
+                   return replyTarget ? (
+                     <div className="chat-reply-banner">
+                       <span>Replying to {replyTarget.senderName}</span>
+                       <button type="button" className="secondary-btn compact-btn" onClick={() => setChatReplyTargetId(null)}>Cancel</button>
+                     </div>
+                   ) : null;
+                 })() : null}
+
+                 <form className="floating-chat-form" onSubmit={handleChatSubmit}>
+                   <div className="chat-composer-row">
+                     <label className="chat-photo-button" aria-label="Upload photo">
+                       <input type="file" accept="image/*" onChange={handleChatPhotoUpload} />
+                       <span>+</span>
+                     </label>
+                     <textarea
+                       value={chatDraft}
+                       onChange={(event) => handleChatDraftChange(event.target.value)}
+                       onKeyDown={(event) => {
+                         if (event.key === 'Enter' && !event.shiftKey) {
+                           event.preventDefault();
+                           event.currentTarget.form?.requestSubmit();
+                         }
+                       }}
+                       placeholder="Type a message..."
+                       maxLength={500}
+                       rows={1}
+                     />
+                     <button type="submit" className="chat-send-button" aria-label="Send message">
+                       <Send size={16} />
+                     </button>
+                   </div>
+
+                   {chatPreviewImage ? (
+                     <div className="chat-preview-wrap">
+                       <img src={chatPreviewImage} alt="Chat preview" />
+                       <button type="button" className="text-link danger-link" onClick={() => setChatPreviewImage(null)}>Remove photo</button>
+                     </div>
+                   ) : null}
+                 </form>
+           </div>
+         ) : null}
+       </>
+     ) : null}
      {toastMessage ? (
        <div className="toast">
          <span>{toastMessage}</span>
@@ -3729,7 +4820,6 @@ function PondSummaryPanel({
     method: '',
     destination: '',
   });
-
   useEffect(() => {
     setTargetDate(harvestDateValue);
   }, [pond.id, harvestDateValue]);
@@ -3787,10 +4877,11 @@ function PondSummaryPanel({
           </div>
         </div>
 
+
       </div>
 
-      {!isOwner ? (
-        <form className="worker-log-form" onSubmit={onSubmit}>
+        {!isOwner ? (
+          <form className="worker-log-form" onSubmit={onSubmit}>
           <select value={form.feedSize || currentFeedSize} onChange={(event) => onFormChange({ ...form, feedSize: event.target.value })} disabled={Boolean(summary.recommendedFeedSize || summary.latestFeedSize)}>
             <option value="1mm">1mm</option>
             <option value="1.5mm">1.5mm</option>
@@ -3826,9 +4917,10 @@ function PondSummaryPanel({
           <input type="number" min="0" step="1" placeholder="Average weight (g)" value={form.avgWeightGrams} onChange={(event) => onFormChange({ ...form, avgWeightGrams: event.target.value })} />
           <input placeholder="Growth note" value={form.growthComment} onChange={(event) => onFormChange({ ...form, growthComment: event.target.value })} />
           <textarea placeholder="Water or behavior note" value={form.waterComment} onChange={(event) => onFormChange({ ...form, waterComment: event.target.value })} />
+
           <button className="primary-btn" type="submit"><Upload size={16} />Submit pond update</button>
         </form>
-      ) : null}
+          ) : null}
     </Panel>
   );
 }
@@ -3852,7 +4944,17 @@ function FinanceTable({
   return (
     <div className="finance-table-wrap">
       <table className="finance-table">
-        <thead><tr><th>No.</th><th>Type</th><th>Category</th><th>Qty</th><th>Unit Price</th><th>Amount</th><th>Pond</th><th>Date</th><th className="finance-delete-head">Delete</th></tr></thead>
+        <colgroup>
+          <col style={{ width: '54px' }} />
+          <col style={{ width: '110px' }} />
+          <col style={{ width: '132px' }} />
+          <col style={{ width: '86px' }} />
+          <col style={{ width: '136px' }} />
+          <col style={{ width: '156px' }} />
+          <col style={{ width: '172px' }} />
+          <col style={{ width: '126px' }} />
+        </colgroup>
+        <thead><tr><th>No.</th><th>Type</th><th>Category</th><th>Qty</th><th>Unit Price</th><th>Amount</th><th>Pond</th><th>Date</th></tr></thead>
         <tbody>
           {records.map((record, index) => (
             <tr
@@ -3870,8 +4972,8 @@ function FinanceTable({
               <td>{record.unitPrice ? formatDalasi(record.unitPrice) : '-'}</td>
               <td>{formatDalasi(record.amount)}</td>
               <td>{record.pond ? `Pond ${record.pond.number}` : 'All ponds'}</td>
-              <td>{new Date(record.recordedAt).toLocaleDateString()}</td>
-              <td className="finance-delete-cell">
+              <td className="finance-date-cell">
+                <span>{new Date(record.recordedAt).toLocaleDateString()}</span>
                 <button
                   type="button"
                   className="danger-icon"
@@ -3907,9 +5009,9 @@ function Metric({ label, value, detail, icon: Icon, tone, active = false, onClic
   );
 }
 
-function Panel({ eyebrow, title, children, className }: { eyebrow: string; title: string; children: ReactNode; className?: string }) {
+function Panel({ eyebrow, title, children, className, style }: { eyebrow: string; title: string; children: ReactNode; className?: string; style?: React.CSSProperties }) {
   return (
-    <section className={className ? `panel ${className}` : 'panel'}>
+    <section className={className ? `panel ${className}` : 'panel'} style={style}>
       <div className="panel-heading"><div><p className="eyebrow">{eyebrow}</p><h2>{title}</h2></div></div>
       {children}
     </section>
