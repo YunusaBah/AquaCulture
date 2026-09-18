@@ -408,8 +408,8 @@ enum SyncStatus {
 }
 
 enum FinanceRecordType {
-  INCOME
-  EXPENSE
-  BUDGET
+  SALES
+  RUNNING_COST
+  FIXED_COST
 }
 

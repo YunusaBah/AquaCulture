@@ -190,12 +190,12 @@ async function main() {
 
 
   const financeRecords = [
-    { id: 'demo-finance-feed', type: 'EXPENSE', category: 'Feed', description: 'Purchased feed', quantity: 100, unit: 'bags', unitPrice: 950, amount: 95000 },
-    { id: 'demo-finance-medicine', type: 'EXPENSE', category: 'Medicine', description: 'Medicine purchase', quantity: 1, unit: 'batch', unitPrice: 8500, amount: 8500 },
-    { id: 'demo-finance-fuel', type: 'EXPENSE', category: 'Fuel', description: 'Generator fuel', quantity: 1, unit: 'month', unitPrice: 3200, amount: 3200 },
-    { id: 'demo-finance-workers', type: 'EXPENSE', category: 'Workers', description: 'Worker allowance', quantity: 1, unit: 'month', unitPrice: 15000, amount: 15000 },
-    { id: 'demo-finance-harvest', type: 'INCOME', category: 'Harvest', description: 'Sold harvested fish', quantity: 1300, unit: 'kg', unitPrice: 220, amount: 286000 },
-    { id: 'demo-finance-budget', type: 'BUDGET', category: 'Operating Budget', description: 'Monthly operating budget', quantity: 1, unit: 'month', unitPrice: 150000, amount: 150000 },
+    { id: 'demo-finance-feed', type: 'RUNNING_COST', category: 'Feed', description: 'Purchased feed', quantity: 100, unit: 'bags', unitPrice: 950, amount: 95000 },
+    { id: 'demo-finance-medicine', type: 'RUNNING_COST', category: 'Medicine', description: 'Medicine purchase', quantity: 1, unit: 'batch', unitPrice: 8500, amount: 8500 },
+    { id: 'demo-finance-fuel', type: 'RUNNING_COST', category: 'Fuel', description: 'Generator fuel', quantity: 1, unit: 'month', unitPrice: 3200, amount: 3200 },
+    { id: 'demo-finance-workers', type: 'RUNNING_COST', category: 'Workers', description: 'Worker allowance', quantity: 1, unit: 'month', unitPrice: 15000, amount: 15000 },
+    { id: 'demo-finance-harvest', type: 'SALES', category: 'Harvest', description: 'Sold harvested fish', quantity: 1300, unit: 'kg', unitPrice: 220, amount: 286000 },
+    { id: 'demo-finance-budget', type: 'FIXED_COST', category: 'Operating Budget', description: 'Monthly operating budget', quantity: 1, unit: 'month', unitPrice: 150000, amount: 150000 },
   ];
 
   for (const record of financeRecords) {

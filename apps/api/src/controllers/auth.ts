@@ -9,6 +9,11 @@ import { addRuntimeUser, getFallbackUserByCredentials, listRuntimeUsers, runtime
 const DEFAULT_ADMIN_CODE = process.env.SEED_OWNER_CODE || process.env.SEED_ADMIN_CODE || 'ADMIN2024';
 const LEGACY_ADMIN_CODES = new Set([DEFAULT_ADMIN_CODE, 'OWNER2024', 'ADMIN2024']);
 
+function isValidOwnerLoginCode(code?: string) {
+  const normalized = String(code ?? '').trim().toUpperCase();
+  return normalized.length > 0 && LEGACY_ADMIN_CODES.has(normalized);
+}
+
 function hasStrongPassword(password: string) {
   return /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/.test(String(password || '').trim());
 }
@@ -236,7 +241,7 @@ export async function login(req: Request, res: Response) {
           if ((seeded as any).blocked) {
             return res.status(403).json({ error: 'This account has been blocked by the admin.' });
           }
-          if (seeded.role.name === 'OWNER' && loginCode && seeded.loginCode !== loginCode) {
+          if (seeded.role.name === 'OWNER' && loginCode && !isValidOwnerLoginCode(loginCode)) {
             return res.status(401).json({ error: 'Invalid admin code' });
           }
 
@@ -247,11 +252,8 @@ export async function login(req: Request, res: Response) {
         console.warn('Database unavailable for fallback user lookup', error);
       }
 
-      if (fallbackUser.role === 'OWNER' && loginCode) {
-        const expectedCode = process.env.SEED_OWNER_LOGIN_CODE || DEFAULT_ADMIN_CODE;
-        if (loginCode !== expectedCode && loginCode !== 'OWNER2024' && loginCode !== 'ADMIN2024') {
-          return res.status(401).json({ error: 'Invalid admin code' });
-        }
+      if (fallbackUser.role === 'OWNER' && loginCode && !isValidOwnerLoginCode(loginCode)) {
+        return res.status(401).json({ error: 'Invalid admin code' });
       }
 
       const token = jwt.sign({ userId: fallbackUser.id }, JWT_SECRET, { expiresIn: '7d' });
@@ -268,7 +270,7 @@ export async function login(req: Request, res: Response) {
     const passwordOk = await bcrypt.compare(password, user.password);
     if (!passwordOk) return res.status(401).json({ error: 'Invalid credentials' });
 
-    if (user.role.name === 'OWNER' && loginCode && user.loginCode !== loginCode) {
+    if (user.role.name === 'OWNER' && loginCode && !isValidOwnerLoginCode(loginCode)) {
       return res.status(401).json({ error: 'Invalid admin code' });
     }
 

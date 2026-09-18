@@ -17,7 +17,7 @@ CREATE TYPE "TaskPriority" AS ENUM ('LOW', 'MEDIUM', 'HIGH', 'URGENT');
 CREATE TYPE "SyncStatus" AS ENUM ('PENDING', 'SYNCHRONIZED', 'REJECTED');
 
 -- CreateEnum
-CREATE TYPE "FinanceRecordType" AS ENUM ('INCOME', 'EXPENSE', 'BUDGET');
+CREATE TYPE "FinanceRecordType" AS ENUM ('SALES', 'RUNNING_COST', 'FIXED_COST');
 
 -- CreateTable
 CREATE TABLE "User" (

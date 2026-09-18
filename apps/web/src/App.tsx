@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, useRef, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, useRef, Fragment, type ReactNode } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -74,6 +74,23 @@ const emptyState: ApiState = {
   financeRecords: [],
 };
 
+const CHAT_STORAGE_KEY = 'aquaculture-global-chat';
+const CHAT_READ_STORAGE_KEY = 'aquaculture-global-chat-last-read';
+
+function formatChatDateDivider(dateValue: string | Date) {
+  const date = new Date(dateValue);
+  if (Number.isNaN(date.getTime())) return 'Date';
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+
+  const sameDay = (left: Date, right: Date) => left.getFullYear() === right.getFullYear() && left.getMonth() === right.getMonth() && left.getDate() === right.getDate();
+
+  if (sameDay(date, today)) return 'Today';
+  if (sameDay(date, yesterday)) return 'Yesterday';
+  return date.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
 const ownerNav = [
   { id: 'command', label: "Today's Analytics", icon: Activity },
   { id: 'ponds', label: 'Ponds', icon: Fish },
@@ -98,7 +115,8 @@ const viewerNav = [
 ];
 
 function formatDalasi(value: number) {
-  return `D${Math.round(value || 0).toLocaleString()}`;
+  const safe = Math.round(value || 0);
+  return `${safe < 0 ? '-' : ''}D${Math.abs(safe).toLocaleString()}`;
 }
 
 function titleCase(value: string) {
@@ -106,9 +124,9 @@ function titleCase(value: string) {
 }
 
 const financeTypeLabels: Record<string, string> = {
-  INCOME: 'Sales',
-  EXPENSE: 'Running Cost',
-  BUDGET: 'Fixed Cost',
+  SALES: 'Sales',
+  RUNNING_COST: 'Running Cost',
+  FIXED_COST: 'Fixed Cost',
 };
 
 const financeUnitOptions = ['kg', 'bags', 'batches', 'weekly', 'monthly', 'litres', 'tons', 'units', 'boxes', 'items'];
@@ -121,7 +139,8 @@ const inventoryUnitByCategory: Record<string, string> = {
 };
 
 function formatFinanceType(value: string) {
-  return financeTypeLabels[value] || titleCase(value);
+  const normalized = value === 'INCOME' ? 'SALES' : value === 'EXPENSE' ? 'RUNNING_COST' : value === 'BUDGET' ? 'FIXED_COST' : value;
+  return financeTypeLabels[normalized] || titleCase(normalized || value);
 }
 
 function getInventoryUnitForCategory(category: string) {
@@ -286,10 +305,18 @@ function App() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => {
     if (typeof window === 'undefined') return [];
     try {
-      const stored = localStorage.getItem('aquaculture-global-chat');
+      const stored = localStorage.getItem(CHAT_STORAGE_KEY);
       return stored ? JSON.parse(stored) : [];
     } catch {
       return [];
+    }
+  });
+  const [chatLastReadAt, setChatLastReadAt] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      return localStorage.getItem(CHAT_READ_STORAGE_KEY) || null;
+    } catch {
+      return null;
     }
   });
   const [revealedChatId, setRevealedChatId] = useState<string | null>(null);
@@ -300,10 +327,43 @@ function App() {
   const lastMentionedChatIdRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!token && typeof window !== 'undefined') {
-      localStorage.setItem('aquaculture-global-chat', JSON.stringify(chatMessages));
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chatMessages));
     }
-  }, [chatMessages, token]);
+  }, [chatMessages]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(CHAT_READ_STORAGE_KEY, chatLastReadAt || '');
+    }
+  }, [chatLastReadAt]);
+
+  const normalizeChatMessage = useCallback((message: any): ChatMessage => ({
+    id: message.id,
+    senderId: message.senderId || message.sender?.id || '',
+    senderName: message.sender?.name || message.sender?.email?.split('@')[0] || 'User',
+    senderRole: message.sender?.role === 'OWNER' || message.senderRole === 'OWNER' ? 'OWNER' : 'WORKER',
+    text: message.text || '',
+    imageUrl: message.imageUrl || null,
+    mentions: Array.isArray(message.mentions) ? message.mentions : [],
+    createdAt: message.createdAt || new Date().toISOString(),
+  }), []);
+
+  const sortedChatMessages = useMemo(() => {
+    return [...chatMessages].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  }, [chatMessages]);
+
+  const markChatRead = useCallback(() => {
+    if (!chatMessages.length) return;
+    const newest = [...chatMessages].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+    if (!newest) return;
+    setChatLastReadAt((current) => current && new Date(current).getTime() >= new Date(newest.createdAt).getTime() ? current : newest.createdAt);
+  }, [chatMessages]);
+
+  useEffect(() => {
+    if (!chatOpen) return;
+    markChatRead();
+  }, [chatOpen, markChatRead]);
 
   useEffect(() => {
     if (!chatOpen || !chatListRef.current) return;
@@ -312,7 +372,7 @@ function App() {
       const list = chatListRef.current;
       list.scrollTo({ top: list.scrollHeight, behavior: 'auto' });
     });
-  }, [chatOpen, chatMessages.length, chatMessages]);
+  }, [chatOpen, chatMessages.length, sortedChatMessages]);
 
   useEffect(() => {
     if (!currentUser || !chatMessages.length) return;
@@ -328,16 +388,18 @@ function App() {
     }
   }, [chatMessages, currentUser]);
 
-  const normalizeChatMessage = useCallback((message: any): ChatMessage => ({
-    id: message.id,
-    senderId: message.senderId || message.sender?.id || '',
-    senderName: message.sender?.name || message.sender?.email?.split('@')[0] || 'User',
-    senderRole: message.sender?.role === 'OWNER' || message.senderRole === 'OWNER' ? 'OWNER' : 'WORKER',
-    text: message.text || '',
-    imageUrl: message.imageUrl || null,
-    mentions: Array.isArray(message.mentions) ? message.mentions : [],
-    createdAt: message.createdAt || new Date().toISOString(),
-  }), []);
+  const recentDividerIndex = useMemo(() => {
+    if (!chatOpen || !chatLastReadAt) return -1;
+    const latestReadAt = new Date(chatLastReadAt).getTime();
+    let result = -1;
+    for (let index = 0; index < sortedChatMessages.length; index += 1) {
+      if (new Date(sortedChatMessages[index].createdAt).getTime() > latestReadAt) {
+        result = index;
+        break;
+      }
+    }
+    return result;
+  }, [chatLastReadAt, chatOpen, sortedChatMessages]);
 
   const loadChatMessages = useCallback(async () => {
     if (!token) {
@@ -354,7 +416,13 @@ function App() {
         console.warn('Failed to load chat messages', payload.error || response.statusText);
         return;
       }
-      setChatMessages((payload.messages || []).map(normalizeChatMessage));
+
+      const remoteMessages: ChatMessage[] = (payload.messages || []).map(normalizeChatMessage);
+      setChatMessages((current: ChatMessage[]) => {
+        const pending = current.filter((message: ChatMessage) => String(message.id).startsWith('local-'));
+        const merged = [...remoteMessages, ...pending.filter((pendingMessage: ChatMessage) => !remoteMessages.some((existing: ChatMessage) => existing.text === pendingMessage.text && existing.senderId === pendingMessage.senderId && Math.abs(new Date(existing.createdAt).getTime() - new Date(pendingMessage.createdAt).getTime()) < 5000))];
+        return merged.sort((a: ChatMessage, b: ChatMessage) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+      });
     } catch (error) {
       console.warn('Chat messages unavailable', error);
     }
@@ -395,10 +463,61 @@ function App() {
   };
 
   const [pondLogForm, setPondLogForm] = useState(defaultPondLogForm);
+  const [pondFeedRecommendations, setPondFeedRecommendations] = useState<Record<string, string>>({});
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const resetPondLogForm = () => {
     setPondLogForm({ ...defaultPondLogForm });
   };
+
+  const getFeedSizeFromInventoryItem = useCallback((item: any) => {
+    if (!item) return null;
+    const direct = String(item.feedSize || item.size || '').trim();
+    if (direct) return direct;
+    const match = String(item.name || '').match(/(\d+(?:\.\d+)?)mm/i);
+    return match ? `${match[1]}mm` : null;
+  }, []);
+
+  const getInventoryFeedOptions = useCallback(() => data.inventoryItems.filter((item: any) => {
+    const category = String(item.category || '').toUpperCase();
+    const name = String(item.name || '').toLowerCase();
+    return category === 'FEED' || name.includes('feed');
+  }), [data.inventoryItems]);
+
+  const getFeedStockItemForPond = useCallback((pondId: string, inventoryItemId?: string, fallbackFeedSize?: string) => {
+    const feedSize = (fallbackFeedSize || pondFeedRecommendations[pondId] || '4mm').toLowerCase();
+    if (inventoryItemId) {
+      return data.inventoryItems.find((item: any) => item.id === inventoryItemId) || null;
+    }
+    return data.inventoryItems.find((item: any) => {
+      const itemSize = getFeedSizeFromInventoryItem(item);
+      return itemSize && itemSize.toLowerCase() === feedSize;
+    }) || null;
+  }, [data.inventoryItems, getFeedSizeFromInventoryItem, pondFeedRecommendations]);
+
+  const adjustInventoryForFeedUse = useCallback(async (pondId: string, inventoryItemId: string | undefined, feedSize: string, quantityKg: number) => {
+    if (!token || !quantityKg || quantityKg <= 0) return;
+    const candidateItem = getFeedStockItemForPond(pondId, inventoryItemId, feedSize);
+    if (!candidateItem) return;
+    try {
+      const response = await fetch(`${apiBaseUrl}/inventory/adjust`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' },
+        body: JSON.stringify({
+          itemId: candidateItem.id,
+          change: -Math.abs(Number(quantityKg)),
+          reason: `Feed used in pond ${pondId}`,
+        }),
+      });
+      if (!response.ok) {
+        const bodyText = await response.text().catch(() => '');
+        let parsed; try { parsed = JSON.parse(bodyText || '{}'); } catch { parsed = { error: bodyText || response.statusText }; }
+        setToastMessage(parsed.error || parsed.message || 'Inventory could not be updated after feed use.');
+      }
+    } catch (error) {
+      console.warn('Failed to deduct inventory after feed use', error);
+    }
+  }, [apiBaseUrl, getFeedStockItemForPond, setToastMessage, token]);
 
   const buildWorkerEmailFromName = useCallback((fullName: string) => {
     const clean = fullName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
@@ -479,7 +598,7 @@ function App() {
   const [mortalityAction, setMortalityAction] = useState({ pondId: '', count: '', cause: '', observedAt: '' });
   const [showPondCreateModal, setShowPondCreateModal] = useState(false);
   const [financeForm, setFinanceForm] = useState({
-    type: 'EXPENSE',
+    type: 'RUNNING_COST',
     category: '',
     quantity: '',
     unit: 'kg',
@@ -529,7 +648,6 @@ function App() {
   }, []);
 
   // auto-dismiss toasts after a short delay so messages don't stick
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
   useEffect(() => {
     if (!toastMessage) return;
     const id = setTimeout(() => setToastMessage(null), 6000);
@@ -617,6 +735,24 @@ function App() {
     if (!finalText && !chatPreviewImage) return;
 
     const mentionNames = [...new Set((finalText.match(/@([A-Za-z0-9_.-]+)/g) || []).map((match) => match.slice(1).trim()))];
+    const optimisticId = `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const optimisticMessage: ChatMessage = {
+      id: optimisticId,
+      senderId: currentUser.id,
+      senderName: currentUser.name || currentUser.email.split('@')[0],
+      senderRole: currentUser.role,
+      text: finalText,
+      imageUrl: chatPreviewImage,
+      mentions: mentionNames,
+      createdAt: new Date().toISOString(),
+    };
+
+    setChatMessages((current: ChatMessage[]) => [...current, optimisticMessage]);
+    setChatDraft('');
+    setChatPreviewImage(null);
+    setChatReplyTargetId(null);
+    setChatRevealDirection(null);
+    setChatOpen(true);
 
     try {
       if (token) {
@@ -636,31 +772,17 @@ function App() {
         if (!response.ok) {
           throw new Error(payload.error || 'Chat send failed');
         }
-        setChatMessages((current: ChatMessage[]) => [...current, normalizeChatMessage(payload.message)]);
+
+        const normalized = normalizeChatMessage(payload.message || optimisticMessage);
+        setChatMessages((current: ChatMessage[]) => current.map((message) => message.id === optimisticId ? normalized : message));
       } else {
-        const nextMessage: ChatMessage = {
-          id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-          senderId: currentUser.id,
-          senderName: currentUser.name || currentUser.email.split('@')[0],
-          senderRole: currentUser.role,
-          text: finalText,
-          imageUrl: chatPreviewImage,
-          mentions: mentionNames,
-          createdAt: new Date().toISOString(),
-        };
-        setChatMessages((current: ChatMessage[]) => [...current, nextMessage]);
+        const nextMessage: ChatMessage = { ...optimisticMessage, id: `${Date.now()}-${Math.random().toString(16).slice(2)}` };
+        setChatMessages((current: ChatMessage[]) => current.map((message) => message.id === optimisticId ? nextMessage : message));
       }
     } catch (error) {
       console.warn('Chat send failed', error);
-      setToastMessage('Unable to send chat message right now.');
-      return;
+      setToastMessage('Message saved locally. It will sync when the connection is ready.');
     }
-
-    setChatDraft('');
-    setChatPreviewImage(null);
-    setChatReplyTargetId(null);
-    setChatRevealDirection(null);
-    setChatOpen(true);
   };
 
   const handleDeleteChatMessage = async (messageId: string, scope: 'all' | 'mine' = 'all') => {
@@ -774,6 +896,13 @@ function App() {
     }
   }, [apiBaseUrl, isOwner, token]);
 
+  const refreshDashboard = useCallback(async () => {
+    await loadData();
+    if (token && isOwner) {
+      await loadWorkerRoster();
+    }
+  }, [isOwner, loadData, loadWorkerRoster, token]);
+
   const flushOfflineSyncQueue = useCallback(async () => {
     if (!token || !navigator.onLine) return;
     const entries = readQueuedSyncEntries();
@@ -810,14 +939,14 @@ function App() {
       if (flushResponse.ok) {
         localStorage.removeItem('aquaculture-sync-queue');
         setPendingSyncCount(0);
-        await loadData();
+        await refreshDashboard();
       }
     }
-  }, [apiBaseUrl, loadData, readQueuedSyncEntries, token]);
+  }, [apiBaseUrl, readQueuedSyncEntries, refreshDashboard, token]);
 
   useEffect(() => {
-    loadData().catch((err) => console.error('Failed to load AquaCulture data', err));
-  }, [loadData]);
+    refreshDashboard().catch((err) => console.error('Failed to load AquaCulture data', err));
+  }, [refreshDashboard]);
 
   useEffect(() => {
     if (token && isOwner) {
@@ -1013,7 +1142,7 @@ function App() {
         }
 
         resetPondLogForm();
-        await loadData();
+        await refreshDashboard();
         await openPond(pondId);
       }
     } catch (err) {
@@ -1113,7 +1242,7 @@ function App() {
     const totalMortality = data.mortalityLogs.reduce((sum, item) => sum + Number(item.numberDead || 0), 0);
     const latestFeedSize = [...data.feedings].sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())[0]?.feedSize || 'Not recorded';
     const lowStock = data.inventoryItems.filter((item) => Number(item.currentStock || 0) <= Number(item.minStock || 0)).length;
-    const finance = data.finance || { income: 0, expenses: 0, budget: 0, profit: 0, status: 'PROFIT', profitMargin: 0, budgetUsedPercent: 0 };
+    const finance = data.finance || { sales: 0, runningCosts: 0, fixedCosts: 0, totalCosts: 0, netProfitLoss: 0, breakEvenAmount: 0, salesNeededToBreakEven: 0, status: 'BREAK_EVEN', profitMargin: 0, budgetUsedPercent: 0, income: 0, expenses: 0, budget: 0, profit: 0 };
     return { totalFeed, totalMortality, lowStock, finance, healthScore: totalMortality > 10 ? 82 : 96, latestFeedSize };
   }, [data]);
 
@@ -1137,9 +1266,9 @@ function App() {
     const financeRecords = data.financeRecords.filter((record) => periodMatches(record.recordedAt || record.createdAt));
     const harvestRecords = data.harvests.filter((record) => periodMatches(record.recordedAt || record.createdAt));
     const pondRecords = data.ponds.filter((pond) => periodMatches(pond.stockedAt || pond.createdAt));
-    const sales = financeRecords.filter((record) => record.type === 'INCOME').reduce((sum, record) => sum + Number(record.amount || 0), 0);
-    const runningCosts = financeRecords.filter((record) => record.type === 'EXPENSE').reduce((sum, record) => sum + Number(record.amount || 0), 0);
-    const fixedCosts = financeRecords.filter((record) => record.type === 'BUDGET').reduce((sum, record) => sum + Number(record.amount || 0), 0);
+    const sales = financeRecords.filter((record) => record.type === 'SALES' || record.type === 'INCOME').reduce((sum, record) => sum + Number(record.amount || 0), 0);
+    const runningCosts = financeRecords.filter((record) => record.type === 'RUNNING_COST' || record.type === 'EXPENSE').reduce((sum, record) => sum + Number(record.amount || 0), 0);
+    const fixedCosts = financeRecords.filter((record) => record.type === 'FIXED_COST' || record.type === 'BUDGET').reduce((sum, record) => sum + Number(record.amount || 0), 0);
     const totalMortality = data.mortalityLogs.filter((record) => periodMatches(record.observedAt || record.createdAt)).reduce((sum, record) => sum + Number(record.numberDead || 0), 0);
     const totalHarvestedFish = harvestRecords.reduce((sum, record) => sum + Number(record.numberHarvested || 0), 0);
     const totalStock = pondRecords.reduce((sum, pond) => sum + Number(pond.current_population || pond.initial_population || 0), 0);
@@ -1170,16 +1299,14 @@ function App() {
     };
   }, [data, reportRange, workers]);
 
-  const workerReportSummary = useMemo(() => {
-    if (!currentUser || isOwner) return null;
-
+  const buildWorkerReportSummary = useCallback((user: CurrentUser | any) => {
     const myPondIds = new Set(
       data.ponds
         .filter((pond) => {
           const assignedUserId = pond.assignedUserId || pond.assignedUser?.id;
           const assignedEmail = pond.assignedUser?.email;
           const assignedName = pond.assignedUser?.name;
-          return assignedUserId === currentUser.id || assignedEmail === currentUser.email || assignedName === currentUser.name;
+          return assignedUserId === user.id || assignedEmail === user.email || assignedName === user.name;
         })
         .map((pond) => pond.id)
     );
@@ -1190,9 +1317,9 @@ function App() {
     const myHarvestEntries = data.harvests.filter((entry) => myPondIds.has(entry.pondId));
     const myTasks = data.tasks.filter((task) =>
       task.assignees?.some((assignee: any) =>
-        assignee.user?.id === currentUser.id ||
-        assignee.user?.email === currentUser.email ||
-        assignee.user?.name === currentUser.name
+        assignee.user?.id === user.id ||
+        assignee.user?.email === user.email ||
+        assignee.user?.name === user.name
       )
     );
 
@@ -1225,6 +1352,8 @@ function App() {
     ].sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime()).slice(0, 6);
 
     return {
+      id: user.id,
+      name: user.name || user.email || 'Worker',
       assignedPonds: myPonds.length,
       feedLogged,
       mortality,
@@ -1234,6 +1363,67 @@ function App() {
       harvestedFish,
       currentStock,
       latestFeedSize: [...myFeedEntries].sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())[0]?.feedSize || 'Not recorded',
+      recentRows,
+    };
+  }, [data]);
+
+  const workerReportSummary = useMemo(() => {
+    if (!currentUser || isOwner) return null;
+    return buildWorkerReportSummary(currentUser);
+  }, [buildWorkerReportSummary, currentUser, isOwner]);
+
+  const allWorkersReportSummaries = useMemo(() => {
+    if (!isOwner) return [];
+    return workers.map((worker) => buildWorkerReportSummary(worker));
+  }, [buildWorkerReportSummary, isOwner, workers]);
+
+  const ownerPerformanceSummary = useMemo(() => {
+    if (!isOwner) return null;
+
+    const financeRows = data.financeRecords
+      .filter((record) => record.recordedAt || record.createdAt)
+      .map((record) => ({
+        id: `finance-${record.id}`,
+        label: `${formatFinanceType(record.type || 'SALES')} record`,
+        amount: formatDalasi(Number(record.amount || 0)),
+        type: 'Finance',
+        date: record.recordedAt || record.createdAt,
+      }));
+
+    const harvestRows = data.harvests
+      .filter((record) => record.recordedAt || record.createdAt)
+      .map((record) => ({
+        id: `harvest-${record.id}`,
+        label: `Harvested ${record.numberHarvested || 0} fish from pond ${record.pondId || '—'}`,
+        amount: `${Number(record.numberHarvested || 0)} fish`,
+        type: 'Harvest',
+        date: record.recordedAt || record.createdAt,
+      }));
+
+    const taskRows = data.tasks
+      .filter((task) => task.updatedAt || task.createdAt)
+      .map((task) => ({
+        id: `task-${task.id}`,
+        label: task.title || 'Task update',
+        amount: task.status === 'COMPLETED' ? 'Completed' : 'Pending',
+        type: 'Task',
+        date: task.updatedAt || task.createdAt,
+      }));
+
+    const recentRows = [...financeRows, ...harvestRows, ...taskRows]
+      .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime())
+      .slice(0, 8);
+
+    return {
+      id: currentUser?.id || 'owner',
+      name: currentUser?.name || 'Admin',
+      totalRecords: data.financeRecords.length + data.harvests.length + data.tasks.length,
+      tasksAssigned: data.tasks.length,
+      tasksCompleted: data.tasks.filter((task) => task.status === 'COMPLETED').length,
+      tasksPending: data.tasks.filter((task) => task.status !== 'COMPLETED').length,
+      feedLogged: data.feedings.reduce((sum, entry) => sum + Number(entry.quantityKg || 0), 0),
+      mortality: data.mortalityLogs.reduce((sum, entry) => sum + Number(entry.numberDead || 0), 0),
+      harvestedFish: data.harvests.reduce((sum, entry) => sum + Number(entry.numberHarvested || 0), 0),
       recentRows,
     };
   }, [currentUser, data, isOwner]);
@@ -1374,9 +1564,9 @@ function App() {
     data.feedings.forEach((item) => addValue(item.createdAt, Number(item.quantityKg || 0)));
     data.mortalityLogs.forEach((item) => addValue(item.createdAt, Number(item.numberDead || 0)));
     data.financeRecords.forEach((item) => {
-      if (item.type === 'INCOME') addValue(item.recordedAt, Number(item.amount || 0));
-      if (item.type === 'EXPENSE') addValue(item.recordedAt, -Number(item.amount || 0));
-      if (item.type === 'BUDGET') addValue(item.recordedAt, 0);
+      if (item.type === 'SALES' || item.type === 'INCOME') addValue(item.recordedAt, Number(item.amount || 0));
+      if (item.type === 'RUNNING_COST' || item.type === 'EXPENSE') addValue(item.recordedAt, -Number(item.amount || 0));
+      if (item.type === 'FIXED_COST' || item.type === 'BUDGET') addValue(item.recordedAt, 0);
     });
     data.ponds.forEach((pond) => addValue(pond.stockedAt || pond.createdAt, 1));
     data.tasks.forEach((task) => addValue(task.createdAt || task.dueAt, 1));
@@ -1569,7 +1759,7 @@ function App() {
     setAdminActionModal(null);
     setTargetHarvestAction({ pondId: '', date: '', time: '09:00', quantity: '' });
     setToastMessage('Target harvest date saved.');
-    await loadData();
+    await refreshDashboard();
     if (selectedPondId === pondId) await openPond(pondId);
   }
 
@@ -1609,7 +1799,7 @@ function App() {
     setAdminActionModal(null);
     setRecommendFeedAction({ pondId: '', inventoryItemId: '', feedSize: '1mm', quantityKg: '1' });
     setToastMessage('Feed recommendation recorded.');
-    await loadData();
+    await refreshDashboard();
     if (selectedPondId === pondId) await openPond(pondId);
   }
 
@@ -1645,7 +1835,7 @@ function App() {
     setAdminActionModal(null);
     setMortalityAction({ pondId: '', count: '', cause: '', observedAt: '' });
     setToastMessage('Mortality record saved.');
-    await loadData();
+    await refreshDashboard();
     if (selectedPondId === pondId) await openPond(pondId);
   }
 
@@ -1763,7 +1953,7 @@ function App() {
     setNewPond({ siteName: '', number: '', species: 'TILAPIA', capacity: '', initialPopulation: '', stockedAt: '', initialAvgWeightG: '', targetHarvestKg: '', targetHarvestUnit: 'g', assignedUserId: 'all' });
     setShowPondCreateModal(false);
     setToastMessage(`Pond ${pondNumber} created successfully.`);
-    await loadData();
+    await refreshDashboard();
   }
 
   const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; type: 'pond' | 'finance' | 'inventory' | 'worker' | 'task' | null; id?: string; label?: string }>({ open: false, type: null });
@@ -1791,7 +1981,7 @@ function App() {
         setSelectedPond(null);
         setSelectedPondSummary(null);
       }
-      await loadData();
+      await refreshDashboard();
     }
     cancelDeleteConfirmation();
   }
@@ -1830,7 +2020,7 @@ function App() {
 
     setPendingFinanceDelete({ item, timeoutId });
     setToastMessage('Row removed');
-    await loadData();
+    await refreshDashboard();
     cancelDeleteConfirmation();
   }
 
@@ -1859,7 +2049,7 @@ function App() {
 
     if (restoreResponse.ok) {
       setToastMessage('Row restored');
-      await loadData();
+      await refreshDashboard();
     } else {
       const bodyText = await restoreResponse.text().catch(() => '');
       let parsed; try { parsed = JSON.parse(bodyText || '{}'); } catch { parsed = { error: bodyText || restoreResponse.statusText }; }
@@ -1888,7 +2078,7 @@ function App() {
       setRecentlyDeleted({ item, timeoutId });
       setToastMessage(`${item.name} deleted — Undo`);
       // optimistically reload list so UI updates immediately
-      await loadData();
+      await refreshDashboard();
     } else {
       setToastMessage('Unable to delete item');
     }
@@ -1911,7 +2101,7 @@ function App() {
     setToastMessage('Task deleted');
     setRevealedSwipeAction(null);
     setDeleteConfirm({ open: false, type: null, id: undefined, label: undefined });
-    await loadData();
+    await refreshDashboard();
   }
 
   async function undoDeleteInventory() {
@@ -1929,7 +2119,7 @@ function App() {
     const response = await fetch(`${apiBaseUrl}/inventory`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' }, body: JSON.stringify(body) });
     if (response.ok) {
       setToastMessage(`${item.name} restored`);
-      await loadData();
+      await refreshDashboard();
     } else {
       setToastMessage('Unable to restore item');
     }
@@ -1958,7 +2148,7 @@ function App() {
         setToastMessage(`${data.harvest.numberHarvested} fish recorded — Undo`);
         setShowHarvestForm(false);
         setHarvestForm({ numberHarvested: '', avgWeightGrams: '', biomassKg: '', method: '', destination: '' });
-        await loadData();
+        await refreshDashboard();
       } else {
         const bodyText = await r.text().catch(() => '');
         let parsed; try { parsed = JSON.parse(bodyText || '{}'); } catch { parsed = { error: bodyText || r.statusText }; }
@@ -1984,7 +2174,7 @@ function App() {
         return;
       }
       setToastMessage('Harvest updated');
-      await loadData();
+      await refreshDashboard();
       if (selectedPondId) await openPond(selectedPondId);
     } catch (error) {
       setToastMessage('Failed to update harvest');
@@ -2013,7 +2203,7 @@ function App() {
         return;
       }
       setToastMessage(`Recommended feed ${recommendedSize} applied`);
-      await loadData();
+      await refreshDashboard();
       if (selectedPondId) await openPond(selectedPondId);
     } catch (error) {
       setToastMessage('Failed to apply recommended feed');
@@ -2027,7 +2217,7 @@ function App() {
       if (r.ok) {
         setToastMessage('Harvest undone');
         setLastCreatedHarvest(null);
-        await loadData();
+        await refreshDashboard();
       } else {
         const bodyText = await r.text().catch(() => ''); let parsed; try { parsed = JSON.parse(bodyText || '{}'); } catch { parsed = { error: bodyText || r.statusText }; }
         setToastMessage(parsed.error || parsed.message || `Server error ${r.status}`);
@@ -2075,7 +2265,7 @@ function App() {
 
     if (!navigator.onLine) {
       queueOfflineSyncEntry('finance_record_create', payload, 'finance_record');
-      setFinanceForm({ type: 'EXPENSE', category: '', quantity: '', unit: 'kg', unitPrice: '', amount: '', pondId: '' });
+      setFinanceForm({ type: 'RUNNING_COST', category: '', quantity: '', unit: 'kg', unitPrice: '', amount: '', pondId: '' });
       setShowFinanceForm(false);
       return;
     }
@@ -2086,9 +2276,9 @@ function App() {
       body: JSON.stringify(payload),
     });
     if (response.ok) {
-      setFinanceForm({ type: 'EXPENSE', category: '', quantity: '', unit: 'kg', unitPrice: '', amount: '', pondId: '' });
+      setFinanceForm({ type: 'RUNNING_COST', category: '', quantity: '', unit: 'kg', unitPrice: '', amount: '', pondId: '' });
       setShowFinanceForm(false);
-      await loadData();
+      await refreshDashboard();
     } else {
       const bodyText = await response.text().catch(() => '');
       let parsed; try { parsed = JSON.parse(bodyText || '{}'); } catch { parsed = { error: bodyText || response.statusText }; }
@@ -2118,7 +2308,7 @@ function App() {
     if (response.ok) {
       setInventoryForm({ category: '', unit: 'kg', currentStock: '', minStock: '', feedSize: '4mm' });
       setShowInventoryForm(false);
-      await loadData();
+      await refreshDashboard();
     }
   }
 
@@ -2144,7 +2334,7 @@ function App() {
 
     if (response.ok) {
       setInventoryAdjustment({ itemId: '', type: 'ADD', quantity: '', reason: 'Restock' });
-      await loadData();
+      await refreshDashboard();
     }
   }
 
@@ -2166,7 +2356,7 @@ function App() {
       setRestockItemId(null);
       setRestockQuantity('');
       setToastMessage('Stock restocked');
-      await loadData();
+      await refreshDashboard();
     } else {
       const bodyText = await response.text().catch(() => '');
       let parsed; try { parsed = JSON.parse(bodyText || '{}'); } catch { parsed = { error: bodyText || response.statusText }; }
@@ -2190,7 +2380,7 @@ function App() {
 
     if (res.ok) {
       setTaskComment('');
-      await loadData();
+      await refreshDashboard();
       setToastMessage('Comment added');
     } else {
       setToastMessage('Failed to add comment');
@@ -2239,7 +2429,7 @@ function App() {
     setShowWorkerCreateModal(false);
     setWorkerPasswords((current) => ({ ...current, [body.user?.id || email]: password }));
     setToastMessage(`Worker account created for ${email}`);
-    await loadData();
+    await refreshDashboard();
     await loadWorkerRoster();
   }
 
@@ -2365,7 +2555,7 @@ function App() {
     });
     if (response.ok) {
       setTaskForm({ title: '', description: '', assigneeId: '', priority: 'HIGH', dueAt: '' });
-      await loadData();
+      await refreshDashboard();
     }
   }
 
@@ -2453,7 +2643,7 @@ function App() {
     const results = await Promise.all(calls);
     if (results.every((result) => result.ok)) {
       resetPondLogForm();
-      await loadData();
+      await refreshDashboard();
       await openPond(selectedPondId);
     }
   }
@@ -2618,7 +2808,7 @@ function App() {
                       if (!token) { setToastMessage('Not authorized'); return; }
                       const body:any = { targetHarvestDate: new Date(dt).toISOString() };
                       const r = await fetch(`${apiBaseUrl}/ponds/${sel}`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' }, body: JSON.stringify(body) });
-                      if (r.ok) { setToastMessage('Scheduled'); await loadData(); setOpenDay(null); } else { const body = await r.text().catch(() => ''); let parsed; try { parsed = JSON.parse(body || '{}'); } catch { parsed = { error: body || r.statusText }; } setToastMessage(parsed.error || parsed.message || `Server error ${r.status}`); }
+                      if (r.ok) { setToastMessage('Scheduled'); await refreshDashboard(); setOpenDay(null); } else { const body = await r.text().catch(() => ''); let parsed; try { parsed = JSON.parse(body || '{}'); } catch { parsed = { error: body || r.statusText }; } setToastMessage(parsed.error || parsed.message || `Server error ${r.status}`); }
                     }}>Schedule</button>
                   </div>
                 </div>
@@ -2787,7 +2977,7 @@ function App() {
                         if (res.ok) {
                           setTaskModalOpen(false);
                           setModalTask(null);
-                          await loadData();
+                          await refreshDashboard();
                           setToastMessage('Task marked done');
                           setTimeout(() => setToastMessage(null), 3000);
                         } else {
@@ -3034,7 +3224,7 @@ function App() {
                     return next;
                   });
                   if (opening) {
-                    await loadData();
+                    await refreshDashboard();
                   } else {
                     await markAllNotificationsRead();
                   }
@@ -3069,7 +3259,7 @@ function App() {
                 { key: 'health', label: 'Farm health', value: `${overview.healthScore}%`, detail: 'Based on mortality and water risk', icon: Activity, tone: 'blue' },
                 { key: 'feed', label: 'Feed logged', value: `${overview.totalFeed || 0} kg`, detail: overview.latestFeedSize !== 'Not recorded' ? `Size used: ${overview.latestFeedSize}` : 'No feed size logged yet', icon: Sprout, tone: 'green' },
                 { key: 'mortality', label: 'Mortality', value: `${overview.totalMortality || 0} fish`, detail: 'Stored mortality records', icon: AlertTriangle, tone: 'orange' },
-                { key: 'profit', label: 'Net position', value: formatDalasi(overview.finance.profit), detail: overview.finance.status === 'PROFIT' ? 'Running profit' : 'Running loss', icon: overview.finance.status === 'PROFIT' ? TrendingUp : TrendingDown, tone: overview.finance.status === 'PROFIT' ? 'green' : 'orange' },
+                { key: 'profit', label: 'Net position', value: formatDalasi(Number(overview.finance.netProfitLoss ?? overview.finance.profit ?? 0)), detail: overview.finance.status === 'PROFIT' ? 'Running profit' : overview.finance.status === 'LOSS' ? 'Running loss' : 'Break-even', icon: overview.finance.status === 'PROFIT' ? TrendingUp : TrendingDown, tone: overview.finance.status === 'PROFIT' ? 'green' : 'orange' },
               ] : [
                 { key: 'health', label: 'Farm health', value: `${overview.healthScore}%`, detail: 'Based on job activity', icon: Activity, tone: 'blue' },
                 { key: 'feed', label: 'Feed logged', value: `${overview.totalFeed || 0} kg`, detail: 'Your assigned pond activity', icon: Sprout, tone: 'green' },
@@ -3293,7 +3483,7 @@ function App() {
                       <div className="report-stat-row highlight"><span>Net position</span><strong>{formatDalasi((reportSummary.sales || 0) - (reportSummary.runningCosts || 0) - (reportSummary.fixedCosts || 0))}</strong></div>
                     </div>
                   </Panel>
-
+ 
                   <Panel eyebrow="Ponds" title="Pond performance" className="reveal-card report-panel" style={{ animationDelay: '100ms' }}>
                     <div className="report-stack">
                       <div className="report-stat-row"><span>Active ponds</span><strong>{reportSummary.activePonds}</strong></div>
@@ -3303,7 +3493,7 @@ function App() {
                       <div className="report-stat-row"><span>Low stock items</span><strong>{reportSummary.lowStockItems}</strong></div>
                     </div>
                   </Panel>
-
+ 
                   <Panel eyebrow="Inventory" title="Stock overview" className="reveal-card report-panel" style={{ animationDelay: '150ms' }}>
                     <div className="report-stack">
                       <div className="report-stat-row"><span>Inventory value</span><strong>{formatDalasi(reportSummary.inventoryValue)}</strong></div>
@@ -3312,7 +3502,7 @@ function App() {
                       <div className="report-stat-row"><span>Feed records</span><strong>{data.feedings.length}</strong></div>
                     </div>
                   </Panel>
-
+ 
                   <Panel eyebrow="Workers" title="Worker performance" className="reveal-card report-panel" style={{ animationDelay: '200ms' }}>
                     <div className="report-worker-list">
                       {reportSummary.workerPerformance.slice(0, 5).map((worker) => (
@@ -3326,6 +3516,87 @@ function App() {
                       ))}
                     </div>
                   </Panel>
+
+                  {ownerPerformanceSummary ? (
+                    <Panel eyebrow="Admin" title={`${ownerPerformanceSummary.name} performance`} className="reveal-card report-panel admin-performance-panel" style={{ animationDelay: '240ms' }}>
+                      <div className="report-stack">
+                        <div className="report-stat-row"><span>Activities logged</span><strong>{ownerPerformanceSummary.totalRecords}</strong></div>
+                        <div className="report-stat-row"><span>Feed logged</span><strong>{ownerPerformanceSummary.feedLogged} kg</strong></div>
+                        <div className="report-stat-row"><span>Harvested fish</span><strong>{ownerPerformanceSummary.harvestedFish}</strong></div>
+                        <div className="report-stat-row"><span>Mortality</span><strong>{ownerPerformanceSummary.mortality}</strong></div>
+                        <div className="report-stat-row"><span>Tasks</span><strong>{ownerPerformanceSummary.tasksCompleted} complete / {ownerPerformanceSummary.tasksPending} pending</strong></div>
+                      </div>
+
+                      <div className="report-activity-timeline" style={{ marginTop: 14 }}>
+                        {ownerPerformanceSummary.recentRows.length === 0 ? (
+                          <div className="report-activity-item empty">
+                            <div className="report-activity-dot" />
+                            <div className="report-activity-copy">
+                              <strong>No admin activity yet</strong>
+                              <span>Farm actions will appear here</span>
+                            </div>
+                          </div>
+                        ) : (
+                          ownerPerformanceSummary.recentRows.map((row) => (
+                            <div key={`${ownerPerformanceSummary.id}-${row.id}`} className="report-activity-item">
+                              <div className="report-activity-dot" />
+                              <div className="report-activity-copy">
+                                <div className="report-activity-head">
+                                  <strong>{row.type}</strong>
+                                  <span>{row.date ? new Date(row.date).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}</span>
+                                </div>
+                                <p>{row.label}</p>
+                                <small>{row.amount}</small>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </Panel>
+                  ) : null}
+                </div>
+ 
+                <div className="report-grid" style={{ marginTop: 18 }}>
+                  {allWorkersReportSummaries.map((workerSummary, index) => (
+                    <Panel key={workerSummary.id || workerSummary.name} eyebrow="Worker report" title={workerSummary.name} className="reveal-card report-panel" style={{ animationDelay: `${220 + index * 40}ms` }}>
+                      <div className="report-stack">
+                        <div className="report-stat-row"><span>Assigned ponds</span><strong>{workerSummary.assignedPonds}</strong></div>
+                        <div className="report-stat-row"><span>Feed logged</span><strong>{workerSummary.feedLogged} kg</strong></div>
+                        <div className="report-stat-row"><span>Mortality</span><strong>{workerSummary.mortality}</strong></div>
+                        <div className="report-stat-row"><span>Current stock</span><strong>{workerSummary.currentStock}</strong></div>
+                        <div className="report-stat-row"><span>Assigned tasks</span><strong>{workerSummary.tasksAssigned}</strong></div>
+                        <div className="report-stat-row"><span>Completed / pending</span><strong>{workerSummary.tasksCompleted} / {workerSummary.tasksPending}</strong></div>
+                        <div className="report-stat-row"><span>Harvested fish</span><strong>{workerSummary.harvestedFish}</strong></div>
+                        <div className="report-stat-row"><span>Latest feed size</span><strong>{workerSummary.latestFeedSize}</strong></div>
+                      </div>
+ 
+                      <div className="report-activity-timeline" style={{ marginTop: 14 }}>
+                        {workerSummary.recentRows.length === 0 ? (
+                          <div className="report-activity-item empty">
+                            <div className="report-activity-dot" />
+                            <div className="report-activity-copy">
+                              <strong>No activity yet</strong>
+                              <span>Waiting for worker records</span>
+                            </div>
+                          </div>
+                        ) : (
+                          workerSummary.recentRows.map((row) => (
+                            <div key={`${workerSummary.id}-${row.id}`} className="report-activity-item">
+                              <div className="report-activity-dot" />
+                              <div className="report-activity-copy">
+                                <div className="report-activity-head">
+                                  <strong>{row.type}</strong>
+                                  <span>{row.date ? new Date(row.date).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}</span>
+                                </div>
+                                <p>{row.label}</p>
+                                <small>{row.amount}</small>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </Panel>
+                  ))}
                 </div>
               </>
             ) : (
@@ -3748,7 +4019,7 @@ function App() {
                         const timestamp = new Date(`${targetHarvestAction.date}T${targetHarvestAction.time || '09:00'}`);
                         const body: any = { targetHarvestDate: timestamp.toISOString(), targetHarvestQuantity: qty };
                         const r = await fetch(`${apiBaseUrl}/ponds/${pondId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' }, body: JSON.stringify(body) });
-                        if (r.ok) { setToastMessage('Target harvest set'); setAdminActionModal(null); await loadData(); } else { const txt = await r.text().catch(() => ''); let parsed; try { parsed = JSON.parse(txt || '{}'); } catch { parsed = { error: txt || r.statusText }; } setToastMessage(parsed.error || parsed.message || `Server error ${r.status}`); }
+                        if (r.ok) { setToastMessage('Target harvest set'); setAdminActionModal(null); await refreshDashboard(); } else { const txt = await r.text().catch(() => ''); let parsed; try { parsed = JSON.parse(txt || '{}'); } catch { parsed = { error: txt || r.statusText }; } setToastMessage(parsed.error || parsed.message || `Server error ${r.status}`); }
                       } catch (err) {
                         setToastMessage('Failed to set target harvest');
                       }
@@ -3819,7 +4090,7 @@ function App() {
                         setToastMessage(`${qty} fish recorded.`);
                         setAdminActionModal(null);
                         setHarvestQuantityAction({ pondId: '', quantity: '', avgWeightGrams: '', biomassKg: '', method: '', destination: '' });
-                        await loadData();
+                        await refreshDashboard();
                         if (selectedPondId === pondId) await openPond(pondId);
                       } catch (err) {
                         setToastMessage('Failed to record harvest quantity.');
@@ -3916,7 +4187,7 @@ function App() {
                         const current = Number((data.ponds.find(p => p.id === sel)?.current_population) || 0);
                         const initial = Number((data.ponds.find(p => p.id === sel)?.initial_population) || 0);
                         const response = await fetch(`${apiBaseUrl}/ponds/${sel}`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' }, body: JSON.stringify({ current_population: current + q, initial_population: initial + q }) });
-                        if (response.ok) { setToastMessage(`Restocked ${q} fish`); setAdminRestockQty(''); setAdminActionModal(null); await loadData(); } else { const body = await response.text().catch(()=>''); let parsed; try { parsed = JSON.parse(body || '{}'); } catch { parsed = { error: body || response.statusText }; } setToastMessage(parsed.error || parsed.message || `Server error ${response.status}`); }
+                        if (response.ok) { setToastMessage(`Restocked ${q} fish`); setAdminRestockQty(''); setAdminActionModal(null); await refreshDashboard(); } else { const body = await response.text().catch(()=>''); let parsed; try { parsed = JSON.parse(body || '{}'); } catch { parsed = { error: body || response.statusText }; } setToastMessage(parsed.error || parsed.message || `Server error ${response.status}`); }
                       } catch (err) { setToastMessage('Failed to restock pond'); }
                     }}>
                       <label className="worker-field full-width">
@@ -3992,6 +4263,7 @@ function App() {
                     token={token}
                     apiBaseUrl={apiBaseUrl}
                     loadData={loadData}
+                    refreshDashboard={refreshDashboard}
                     setToastMessage={setToastMessage}
                   />
                 </div>
@@ -4371,24 +4643,24 @@ function App() {
         {activeNav === 'finance' && isOwner ? (
           <>
             <section className="metrics-grid">
-              <Metric label="Sales" value={formatDalasi(overview.finance.income)} detail="All sales records" icon={Wallet} tone="blue" />
-              <Metric label="Running Cost" value={formatDalasi(overview.finance.expenses)} detail={`${overview.finance.budgetUsedPercent}% fixed cost used`} icon={TrendingDown} tone="orange" />
-              <Metric label="Fixed Cost" value={formatDalasi(overview.finance.budget)} detail={`${formatDalasi(overview.finance.budgetRemaining)} remaining`} icon={CalendarClock} tone="navy" />
-              <Metric label="Net profit/loss" value={formatDalasi(overview.finance.profit)} detail={`${overview.finance.profitMargin}% margin | ${overview.finance.status}`} icon={overview.finance.status === 'PROFIT' ? TrendingUp : TrendingDown} tone={overview.finance.status === 'PROFIT' ? 'green' : 'orange'} />
+              <Metric label="Sales" value={formatDalasi(Number(overview.finance?.sales ?? overview.finance?.income ?? 0))} detail={`${Number(overview.finance?.salesCount ?? overview.finance?.salesRecords ?? 0)} sales records`} icon={Wallet} tone="blue" />
+              <Metric label="Running Cost" value={formatDalasi(Number(overview.finance?.runningCosts ?? overview.finance?.expenses ?? 0))} detail={`${formatDalasi(Number(overview.finance?.salesNeededToBreakEven ?? overview.finance?.breakEvenAmount ?? 0))} to break even`} icon={TrendingDown} tone="orange" />
+              <Metric label="Fixed Cost" value={formatDalasi(Number(overview.finance?.fixedCosts ?? overview.finance?.budget ?? 0))} detail={`${formatDalasi(Number(overview.finance?.totalCosts ?? Number(overview.finance?.runningCosts ?? 0) + Number(overview.finance?.fixedCosts ?? 0)))} total costs`} icon={CalendarClock} tone="navy" />
+              <Metric label="Net profit/loss" value={formatDalasi(Number(overview.finance?.netProfitLoss ?? overview.finance?.profit ?? 0))} detail={overview.finance?.status === 'LOSS' ? `${formatDalasi(Number(overview.finance?.salesNeededToBreakEven ?? Math.max(0, Number(overview.finance?.breakEvenAmount ?? 0))))} more sales needed to break even` : overview.finance?.status === 'BREAK_EVEN' ? 'Break-even at zero profit' : `${formatDalasi(Number(overview.finance?.netProfitLoss ?? overview.finance?.profit ?? 0))} profit`} icon={overview.finance?.status === 'PROFIT' ? TrendingUp : TrendingDown} tone={overview.finance?.status === 'PROFIT' ? 'green' : 'orange'} />
             </section>
 
             <section className="finance-section">
               <Panel eyebrow="Finance ledger" title="Finance ledger records" className="finance-worksheet-panel">
-                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
-                  <button type="button" className="primary-btn" onClick={() => setShowFinanceForm((current) => !current)}><Plus size={16} />{showFinanceForm ? 'Close' : 'Add row'}</button>
+                <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 12, gap: 12 }}>
+                  <button type="button" className="primary-btn" onClick={() => setShowFinanceForm((current) => !current)} style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Plus size={16} />{showFinanceForm ? 'Close' : 'Add row'}</button>
                 </div>
 
                 {showFinanceForm ? (
                   <form className="finance-form finance-form-popup" onSubmit={handleCreateFinanceRecord}>
                     <select value={financeForm.type} onChange={(event) => setFinanceForm({ ...financeForm, type: event.target.value })}>
-                      <option value="EXPENSE">Running Cost</option>
-                      <option value="INCOME">Sales</option>
-                      <option value="BUDGET">Fixed Cost</option>
+                      <option value="RUNNING_COST">Running Cost</option>
+                      <option value="SALES">Sales</option>
+                      <option value="FIXED_COST">Fixed Cost</option>
                     </select>
                     <input placeholder="Category" value={financeForm.category} onChange={(event) => setFinanceForm({ ...financeForm, category: event.target.value })} required />
                     <div className="finance-qty-wrap">
@@ -4414,7 +4686,7 @@ function App() {
                       {data.ponds.map((pond) => <option key={pond.id} value={pond.id}>Pond {pond.number}</option>)}
                     </select>
                     <button className="primary-btn" type="submit"><Plus size={16} />Save</button>
-                    <button type="button" className="secondary-btn" onClick={() => { setShowFinanceForm(false); setFinanceForm({ type: 'EXPENSE', category: '', quantity: '', unit: 'kg', unitPrice: '', amount: '', pondId: '' }); }}>Cancel</button>
+                    <button type="button" className="secondary-btn" onClick={() => { setShowFinanceForm(false); setFinanceForm({ type: 'RUNNING_COST', category: '', quantity: '', unit: 'kg', unitPrice: '', amount: '', pondId: '' }); }}>Cancel</button>
                   </form>
                 ) : null}
 
@@ -4609,50 +4881,58 @@ function App() {
              </div>
 
              <div className="floating-chat-list" ref={chatListRef}>
-               {chatMessages.length === 0 ? (
+               {sortedChatMessages.length === 0 ? (
                  <p className="empty-copy">No messages yet. Start the conversation.</p>
                ) : (
                  <>
-                   <div className="chat-thread-marker">Recent</div>
-                   {chatMessages.map((message) => {
+                   {sortedChatMessages.map((message, index) => {
                      const isMine = message.senderId === currentUser.id;
                      const canDelete = isMine;
                      const isRevealed = revealedChatId === message.id;
                      const actionClass = isRevealed && chatRevealDirection === 'right' ? 'reveal-right' : isRevealed && chatRevealDirection === 'left' ? 'reveal-left' : '';
+                     const messageDateLabel = formatChatDateDivider(message.createdAt);
+                     const previousMessage = sortedChatMessages[index - 1];
+                     const shouldShowDateDivider = index === 0 || (previousMessage && formatChatDateDivider(previousMessage.createdAt) !== messageDateLabel);
+                     const shouldShowRecentDivider = chatOpen && recentDividerIndex >= 0 && index === recentDividerIndex;
+
                      return (
-                       <div key={message.id} className={isRevealed ? `chat-swipe-shell ${actionClass}` : 'chat-swipe-shell'}>
-                         <div className="chat-swipe-action reply-action">
-                           <button type="button" className="secondary-btn compact-btn" onClick={() => setChatReplyTargetId(message.id)}>Reply</button>
-                         </div>
-                         <div
-                           className={isMine ? 'chat-message-row mine' : 'chat-message-row'}
-                           onPointerDown={(event) => handleChatSwipeStart(message.id, event)}
-                           onPointerMove={(event) => handleChatSwipeMove(message.id, event)}
-                           onPointerUp={handleChatSwipeEnd}
-                           onPointerLeave={handleChatSwipeEnd}
-                           style={{ touchAction: 'pan-y' }}
-                         >
-                           <div className="chat-message-header">
-                             <strong>{message.senderName}</strong>
-                             <span>{message.senderRole === 'OWNER' ? 'Admin' : 'Worker'}</span>
+                       <Fragment key={message.id}>
+                         {shouldShowDateDivider ? <div className="chat-date-divider">{messageDateLabel}</div> : null}
+                         {shouldShowRecentDivider ? <div className="chat-thread-marker">Recent Messages</div> : null}
+                         <div className={isRevealed ? `chat-swipe-shell ${actionClass}` : 'chat-swipe-shell'}>
+                           <div className="chat-swipe-action reply-action">
+                             <button type="button" className="secondary-btn compact-btn" onClick={() => setChatReplyTargetId(message.id)}>Reply</button>
                            </div>
-                           {message.text ? <p>{message.text.split(/(@[A-Za-z0-9_.-]+)/g).map((part, index) => part.startsWith('@') ? <mark key={`${message.id}-${index}`} className="chat-mention-highlight">{part}</mark> : <span key={`${message.id}-${index}`}>{part}</span>)}</p> : null}
-                           {message.imageUrl ? (
-                             <div className="chat-message-image-wrap">
-                               <img src={message.imageUrl} alt="Shared chat attachment" />
+                           <div
+                             className={isMine ? 'chat-message-row mine' : 'chat-message-row'}
+                             onPointerDown={(event) => handleChatSwipeStart(message.id, event)}
+                             onPointerMove={(event) => handleChatSwipeMove(message.id, event)}
+                             onPointerUp={handleChatSwipeEnd}
+                             onPointerLeave={handleChatSwipeEnd}
+                             style={{ touchAction: 'pan-y' }}
+                           >
+                             <div className="chat-message-header">
+                               <strong>{message.senderName}</strong>
+                               <span>{message.senderRole === 'OWNER' ? 'Admin' : 'Worker'}</span>
+                             </div>
+                             {message.text ? <p>{message.text.split(/(@[A-Za-z0-9_.-]+)/g).map((part, textIndex) => part.startsWith('@') ? <mark key={`${message.id}-${textIndex}`} className="chat-mention-highlight">{part}</mark> : <span key={`${message.id}-${textIndex}`}>{part}</span>)}</p> : null}
+                             {message.imageUrl ? (
+                               <div className="chat-message-image-wrap">
+                                 <img src={message.imageUrl} alt="Shared chat attachment" />
+                               </div>
+                             ) : null}
+                             <div className="chat-message-meta">
+                               <small>{new Date(message.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })} · {new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</small>
+                               <small className="chat-swipe-hint">Swipe</small>
+                             </div>
+                           </div>
+                           {canDelete ? (
+                             <div className="chat-swipe-action delete-action">
+                               <button type="button" className="danger-btn" onClick={() => setChatDeleteChoiceId((current) => current === message.id ? null : message.id)}>Delete</button>
                              </div>
                            ) : null}
-                           <div className="chat-message-meta">
-                             <small>{new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</small>
-                             <small className="chat-swipe-hint">Swipe</small>
-                           </div>
                          </div>
-                         {canDelete ? (
-                           <div className="chat-swipe-action delete-action">
-                             <button type="button" className="danger-btn" onClick={() => setChatDeleteChoiceId((current) => current === message.id ? null : message.id)}>Delete</button>
-                           </div>
-                         ) : null}
-                       </div>
+                       </Fragment>
                      );
                    })}
                  </>
@@ -4754,6 +5034,7 @@ function PondSummaryPanel({
   token,
   apiBaseUrl,
   loadData,
+  refreshDashboard,
   setToastMessage,
 }: {
   pond: any | null;
@@ -4791,6 +5072,7 @@ function PondSummaryPanel({
   token: string | null;
   apiBaseUrl: string;
   loadData: () => Promise<void>;
+  refreshDashboard: () => Promise<void>;
   setToastMessage: React.Dispatch<React.SetStateAction<string | null>>;
 }) {
   if (!pond || !summary) {
@@ -4833,7 +5115,7 @@ function PondSummaryPanel({
       const r = await fetch(`${apiBaseUrl}/ponds/${pond.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' }, body: JSON.stringify(body) });
       if (r.ok) {
         setToastMessage(value ? 'Target date set' : 'Target date cleared');
-        await loadData();
+        await refreshDashboard();
       } else {
         const bodyText = await r.text().catch(() => '');
         let parsed;

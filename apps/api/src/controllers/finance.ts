@@ -3,31 +3,52 @@ import { prisma } from '../lib/prisma';
 import { AuthRequest } from '../middleware/auth';
 
 function financeSummary(records: Array<{ type: string; amount: number; pondId: string | null }>) {
-  const income = records.filter((record) => record.type === 'INCOME').reduce((sum: number, record) => sum + record.amount, 0);
-  const expenses = records.filter((record) => record.type === 'EXPENSE').reduce((sum: number, record) => sum + record.amount, 0);
-  const budget = records.filter((record) => record.type === 'BUDGET').reduce((sum: number, record) => sum + record.amount, 0);
-  const profit = income - expenses;
-  const budgetRemaining = budget - expenses;
-  const pondTotals = records.reduce<Record<string, { income: number; expenses: number; profit: number }>>((totals, record) => {
+  const salesRecords = records.filter((record) => record.type === 'SALES');
+  const runningCostRecords = records.filter((record) => record.type === 'RUNNING_COST');
+  const fixedCostRecords = records.filter((record) => record.type === 'FIXED_COST');
+  const sales = salesRecords.reduce((sum: number, record) => sum + record.amount, 0);
+  const runningCosts = runningCostRecords.reduce((sum: number, record) => sum + record.amount, 0);
+  const fixedCosts = fixedCostRecords.reduce((sum: number, record) => sum + record.amount, 0);
+  const totalCosts = runningCosts + fixedCosts;
+  const netProfitLoss = sales - totalCosts;
+  const breakEvenAmount = totalCosts - sales;
+  const salesNeededToBreakEven = Math.max(0, breakEvenAmount);
+
+  let status: 'PROFIT' | 'LOSS' | 'BREAK_EVEN' = 'BREAK_EVEN';
+  if (netProfitLoss > 0) status = 'PROFIT';
+  else if (netProfitLoss < 0) status = 'LOSS';
+
+  const pondTotals = records.reduce<Record<string, { sales: number; runningCosts: number; fixedCosts: number; netProfitLoss: number }>>((totals, record) => {
     if (!record.pondId) return totals;
-    const current = totals[record.pondId] || { income: 0, expenses: 0, profit: 0 };
-    if (record.type === 'INCOME') current.income += record.amount;
-    if (record.type === 'EXPENSE') current.expenses += record.amount;
-    current.profit = current.income - current.expenses;
+    const current = totals[record.pondId] || { sales: 0, runningCosts: 0, fixedCosts: 0, netProfitLoss: 0 };
+    if (record.type === 'SALES') current.sales += record.amount;
+    if (record.type === 'RUNNING_COST') current.runningCosts += record.amount;
+    if (record.type === 'FIXED_COST') current.fixedCosts += record.amount;
+    current.netProfitLoss = current.sales - current.runningCosts - current.fixedCosts;
     totals[record.pondId] = current;
     return totals;
   }, {});
 
   return {
-    income,
-    expenses,
-    budget,
-    profit,
-    budgetRemaining,
-    status: profit >= 0 ? 'PROFIT' : 'LOSS',
-    profitMargin: income > 0 ? Number(((profit / income) * 100).toFixed(1)) : 0,
-    budgetUsedPercent: budget > 0 ? Number(((expenses / budget) * 100).toFixed(1)) : 0,
+    sales,
+    salesCount: salesRecords.length,
+    runningCosts,
+    runningCostCount: runningCostRecords.length,
+    fixedCosts,
+    fixedCostCount: fixedCostRecords.length,
+    totalCosts,
+    netProfitLoss,
+    breakEvenAmount,
+    salesNeededToBreakEven,
+    status,
+    profitMargin: totalCosts > 0 ? Number(((netProfitLoss / totalCosts) * 100).toFixed(1)) : 0,
+    budgetUsedPercent: totalCosts > 0 ? Number(((runningCosts / totalCosts) * 100).toFixed(1)) : 0,
     pondTotals,
+    income: sales,
+    expenses: runningCosts,
+    budget: fixedCosts,
+    profit: netProfitLoss,
+    budgetRemaining: breakEvenAmount,
   };
 }
 
@@ -48,6 +69,19 @@ export async function createFinanceRecord(req: AuthRequest, res: Response) {
 
   if (!type || !category) {
     return res.status(400).json({ error: 'type and category are required' });
+  }
+
+  const normalizedType = String(type).toUpperCase();
+  const financeTypeMap: Record<string, string> = {
+    INCOME: 'SALES',
+    EXPENSE: 'RUNNING_COST',
+    BUDGET: 'FIXED_COST',
+  };
+  const financeType = financeTypeMap[normalizedType] || normalizedType;
+  const validTypes = ['SALES', 'RUNNING_COST', 'FIXED_COST'];
+
+  if (!validTypes.includes(financeType)) {
+    return res.status(400).json({ error: 'Invalid finance type. Use SALES, RUNNING_COST, or FIXED_COST.' });
   }
 
   // parse numeric inputs defensively
@@ -72,7 +106,7 @@ export async function createFinanceRecord(req: AuthRequest, res: Response) {
 
   const record = await prisma.financeRecord.create({
     data: {
-      type: type as any,
+      type: financeType as any,
       category,
       description: description || undefined,
       quantity: qNum ?? null,

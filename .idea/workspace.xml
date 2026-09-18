@@ -9,8 +9,12 @@
   <component name="ChangeListManager">
     <list default="true" id="a134e491-888f-4bed-a802-281d0a1d101d" name="Changes" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/api/prisma/migrations/20260910210353_init/migration.sql" beforeDir="false" afterPath="$PROJECT_DIR$/apps/api/prisma/migrations/20260910210353_init/migration.sql" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/apps/api/prisma/schema.prisma" beforeDir="false" afterPath="$PROJECT_DIR$/apps/api/prisma/schema.prisma" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/apps/api/src/server.ts" beforeDir="false" afterPath="$PROJECT_DIR$/apps/api/src/server.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/api/prisma/seed.ts" beforeDir="false" afterPath="$PROJECT_DIR$/apps/api/prisma/seed.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/api/src/controllers/auth.ts" beforeDir="false" afterPath="$PROJECT_DIR$/apps/api/src/controllers/auth.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/api/src/controllers/finance.ts" beforeDir="false" afterPath="$PROJECT_DIR$/apps/api/src/controllers/finance.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/api/src/controllers/sync.ts" beforeDir="false" afterPath="$PROJECT_DIR$/apps/api/src/controllers/sync.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/apps/web/src/App.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/apps/web/src/App.tsx" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/apps/web/src/styles.css" beforeDir="false" afterPath="$PROJECT_DIR$/apps/web/src/styles.css" afterDir="false" />
     </list>
@@ -164,7 +168,10 @@
       <workItem from="1789247461909" duration="17587000" />
       <workItem from="1789298730456" duration="18247000" />
       <workItem from="1789402123556" duration="27296000" />
-      <workItem from="1789478118805" duration="37342000" />
+      <workItem from="1789478118805" duration="37516000" />
+      <workItem from="1789555306570" duration="1443000" />
+      <workItem from="1789645177003" duration="20812000" />
+      <workItem from="1789679227932" duration="8907000" />
     </task>
     <servers />
   </component>

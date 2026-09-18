@@ -96,9 +96,16 @@ async function applyQueuedSyncItem(
     }
 
     case 'finance_record_create': {
+      const normalizedType = String(payload.type ?? 'RUNNING_COST').toUpperCase();
+      const financeTypeMap: Record<string, string> = {
+        INCOME: 'SALES',
+        EXPENSE: 'RUNNING_COST',
+        BUDGET: 'FIXED_COST',
+      };
+      const type = financeTypeMap[normalizedType] || normalizedType;
       return prisma.financeRecord.create({
         data: {
-          type: (payload.type as any) || 'EXPENSE',
+          type: type as any,
           category: String(payload.category || 'General'),
           description: payload.description ? String(payload.description) : null,
           quantity: asNumber(payload.quantity) ?? null,
