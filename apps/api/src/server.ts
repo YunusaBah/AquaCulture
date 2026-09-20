@@ -16,6 +16,7 @@ import siteRoutes from './routes/sites';
 import syncRoutes from './routes/sync';
 import harvestRoutes from './routes/harvest';
 import chatRoutes from './routes/chat';
+import settingsRoutes from './routes/settings';
 import { PORT } from './config';
 
 const app = express();
@@ -24,7 +25,7 @@ app.use(cors({
   origin: true,
   credentials: true,
 }));
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 
 // Serve uploaded files from /uploads
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
@@ -43,6 +44,7 @@ app.use('/api/sites', siteRoutes);
 app.use('/api/sync', syncRoutes);
 app.use('/api/harvests', harvestRoutes);
 app.use('/api/chat', chatRoutes);
+app.use('/api/settings', settingsRoutes);
 
 app.get('/api/health', (_, res) => res.json({ status: 'ok', ts: Date.now() }));
 

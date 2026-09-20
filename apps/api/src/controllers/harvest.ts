@@ -40,13 +40,12 @@ export async function createHarvest(req: AuthRequest, res: Response) {
 
   if (numberHarvested < 0) return res.status(400).json({ error: 'Invalid harvest quantity' });
 
-  if (req.userRole === 'WORKER') {
-    return res.status(403).json({ error: 'Workers are not allowed to create harvests' });
-  }
-
   // ensure pond exists
   const pondWithLogs = await prisma.pond.findUnique({ where: { id: pondId } });
   if (!pondWithLogs) return res.status(404).json({ error: 'Pond not found' });
+  if (req.userRole === 'WORKER' && !workerCanAccessPond(pondWithLogs.assignedUserId, req.userId)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
 
   let harvest;
   try {

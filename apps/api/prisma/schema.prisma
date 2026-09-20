@@ -36,6 +36,7 @@ model User {
   auditLogs       AuditLog[]
   financeRecords  FinanceRecord[]
   syncQueue       DeviceSync[]
+  theme           String            @default("light")
 
   // Task relations
   createdTasks    Task[]
@@ -111,6 +112,7 @@ model Pond {
   initialAvgWeightG  Float?
   targetHarvestKg    Float?
   targetHarvestDate  DateTime?
+  recommendedFeedSize String?
   expectedGrowthGDay Float?
   status             PondStatus        @default(ACTIVE)
   current_batch      FishBatch?        @relation(fields: [current_batchId], references: [id])
@@ -123,6 +125,7 @@ model Pond {
   harvestLogs        HarvestLog[]
   growthMeasurements GrowthMeasurement[]
   financeRecords     FinanceRecord[]
+  inventoryTransactions InventoryTransaction[]
   // Attachments (photos) related to this pond
   attachments        Attachment[]
   // QR code stored as a data URI (optional)
@@ -247,8 +250,8 @@ model InventoryItem {
   name         String
   category     String
   unit         String
-  currentStock Int                    @default(0)
-  minStock     Int                    @default(0)
+  currentStock Float                  @default(0)
+  minStock     Float                  @default(0)
   transactions InventoryTransaction[]
 }
 
@@ -256,7 +259,9 @@ model InventoryTransaction {
   id        String        @id @default(uuid())
   item      InventoryItem @relation(fields: [itemId], references: [id])
   itemId    String
-  change    Int
+  pond      Pond?         @relation(fields: [pondId], references: [id])
+  pondId    String?
+  change    Float
   reason    String?
   createdAt DateTime      @default(now())
 }
@@ -370,6 +375,12 @@ model DeviceSync {
   updatedAt DateTime    @updatedAt
 }
 
+model AppSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
 // Enums
 enum Species {
   CATFISH
@@ -412,4 +423,3 @@ enum FinanceRecordType {
   RUNNING_COST
   FIXED_COST
 }
-

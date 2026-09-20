@@ -39,8 +39,8 @@ export async function listChatMessages(_req: AuthRequest, res: Response) {
 export async function createChatMessage(req: AuthRequest, res: Response) {
   const userId = req.userId!;
   const { text, imageUrl, mentions } = req.body || {};
-  const normalizedText = typeof text === 'string' ? text.trim() : '';
-  const payloadImageUrl = typeof imageUrl === 'string' ? imageUrl : null;
+  const normalizedText = typeof text === 'string' ? text.trim().slice(0, 500) : '';
+  const payloadImageUrl = typeof imageUrl === 'string' && imageUrl.length <= 2_000_000 ? imageUrl : null;
   const payloadMentions = Array.isArray(mentions) ? mentions.filter((item): item is string => typeof item === 'string') : [];
 
   if (!normalizedText && !payloadImageUrl) {

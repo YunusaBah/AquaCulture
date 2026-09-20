@@ -54,6 +54,9 @@ export async function createFeeding(req: AuthRequest, res: Response) {
   let matchedInventoryItem = null as Awaited<ReturnType<typeof prisma.inventoryItem.findUnique>> | null;
   if (inventoryItemId) {
     matchedInventoryItem = await prisma.inventoryItem.findUnique({ where: { id: inventoryItemId } });
+    if (matchedInventoryItem && !matchedInventoryItem.category.toLowerCase().includes('feed') && matchedInventoryItem.unit.toLowerCase() !== 'kg') {
+      return res.status(400).json({ error: 'Selected inventory item is not feed stock.' });
+    }
   }
 
   if (!matchedInventoryItem) {
@@ -71,6 +74,9 @@ export async function createFeeding(req: AuthRequest, res: Response) {
 
   if (matchedInventoryItem && matchedInventoryItem.currentStock < quantityKg) {
     return res.status(400).json({ error: `Not enough ${matchedInventoryItem.name} in stock for this feeding record.` });
+  }
+  if (!matchedInventoryItem) {
+    return res.status(400).json({ error: 'No feed stock is available for this feeding record.' });
   }
 
   const feeding = await prisma.$transaction(async (tx) => {
@@ -104,8 +110,9 @@ export async function createFeeding(req: AuthRequest, res: Response) {
       await tx.inventoryTransaction.create({
         data: {
           itemId: matchedInventoryItem.id,
+          pondId,
           change: -quantityKg,
-          reason: `Feed used on pond ${pondId}`,
+          reason: 'Feed used',
         },
       });
     }

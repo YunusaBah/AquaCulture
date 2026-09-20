@@ -9,6 +9,7 @@ export async function getInventory(req: AuthRequest, res: Response) {
       transactions: {
         orderBy: { createdAt: 'desc' },
         take: 5,
+        include: { pond: { select: { number: true } } },
       },
     },
   });
@@ -54,7 +55,7 @@ export async function createInventoryItem(req: AuthRequest, res: Response) {
         }],
       } : undefined,
     },
-    include: { transactions: true },
+    include: { transactions: { include: { pond: { select: { number: true } } } } },
   });
 
   res.status(201).json({ item });
@@ -90,7 +91,7 @@ export async function adjustInventoryItem(req: AuthRequest, res: Response) {
     const current = await tx.inventoryItem.update({
       where: { id: itemId },
       data: { currentStock: nextStock },
-      include: { transactions: { orderBy: { createdAt: 'desc' }, take: 5 } },
+      include: { transactions: { orderBy: { createdAt: 'desc' }, take: 5, include: { pond: { select: { number: true } } } } },
     });
 
     await tx.inventoryTransaction.create({

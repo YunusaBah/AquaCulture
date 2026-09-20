@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">AquaCulture</string>
+    <string name="title_activity_main">AquaCulture</string>
+    <string name="package_name">com.aquaculture.app</string>
+    <string name="custom_url_scheme">com.aquaculture.app</string>
+</resources>

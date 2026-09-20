@@ -275,6 +275,9 @@ export async function updatePond(req: AuthRequest, res: Response) {
     if (!existing) {
       return res.status(404).json({ error: 'Pond not found' });
     }
+    if (req.userRole === 'WORKER' && !workerCanAccessPond(existing.assignedUserId, req.userId)) {
+      return res.status(403).json({ error: 'You can only update ponds assigned to you.' });
+    }
 
     const pond = await prisma.pond.update({ where: { id }, data, include: { site: true, assignedUser: true, attachments: true } });
 
@@ -293,6 +296,19 @@ export async function updatePond(req: AuthRequest, res: Response) {
         `Target harvest updated for Pond ${pond.number}`,
         `${req.user?.name || 'Farm admin'} set the target harvest date to ${targetDate.toLocaleDateString()} for ${existing.site?.name || 'the pond'}.`,
         { pondId: pond.id, type: 'TARGET_HARVEST_UPDATED' },
+      )));
+    }
+
+    if (data.recommendedFeedSize !== undefined) {
+      const workers = await prisma.user.findMany({
+        where: { role: { name: 'WORKER' } },
+        select: { id: true },
+      });
+      await Promise.all(workers.map((worker) => createNotificationForUser(
+        worker.id,
+        `Feed size updated for Pond ${pond.number}`,
+        `${req.user?.name || 'Farm user'} recommended ${data.recommendedFeedSize || 'no specific size'} feed for Pond ${pond.number}.`,
+        { pondId: pond.id, type: 'FEED_SIZE_RECOMMENDED' },
       )));
     }
 

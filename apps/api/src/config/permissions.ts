@@ -49,6 +49,7 @@ export const ROLE_PERMISSIONS: Record<RoleName, string[]> = {
   ],
   WORKER: [
     'POND_VIEW_ASSIGNED',
+    'POND_UPDATE',
     'FEEDING_CREATE',
     'FEEDING_VIEW_ASSIGNED',
     'FEEDING_UPDATE_OWN',
@@ -64,6 +65,7 @@ export const ROLE_PERMISSIONS: Record<RoleName, string[]> = {
     'TASK_COMPLETE',
     'TASK_COMMENT',
     'ATTACHMENT_CREATE',
+    'INVENTORY_VIEW',
   ],
 };
 export function normalizeRole(role?: string): RoleName | null {

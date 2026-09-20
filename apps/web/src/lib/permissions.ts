@@ -16,7 +16,7 @@ export const ROLE_PERMISSIONS: Record<AppRole, string[]> = {
     'TASK_ASSIGN',
     'TASK_COMPLETE',
   ],
-  WORKER: ['POND_VIEW_ASSIGNED', 'FEEDING_CREATE', 'MORTALITY_CREATE', 'TASK_COMPLETE'],
+  WORKER: ['POND_VIEW_ASSIGNED', 'POND_UPDATE', 'FEEDING_CREATE', 'MORTALITY_CREATE', 'INVENTORY_VIEW', 'TASK_COMPLETE'],
   VIEWER: [
     // Read-only access - can view all dashboards and data but cannot edit
     'FARM_VIEW',

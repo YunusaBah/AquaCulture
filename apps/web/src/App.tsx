@@ -119,6 +119,16 @@ function formatDalasi(value: number) {
   return `${safe < 0 ? '-' : ''}D${Math.abs(safe).toLocaleString()}`;
 }
 
+function formatTwoDecimalPlaces(value: number) {
+  const safeValue = Number(value || 0);
+  if (!Number.isFinite(safeValue)) return '0.00';
+  return safeValue.toFixed(2);
+}
+
+function formatTwoSignificantFigures(value: number) {
+  return formatTwoDecimalPlaces(value);
+}
+
 function titleCase(value: string) {
   return value.toLowerCase().split('_').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
 }
@@ -162,7 +172,10 @@ function getRecommendedFeedSize(avgWeightGrams?: number | null) {
 
 function App() {
   const apiBaseUrl = import.meta.env.VITE_API_URL || '/api';
-  const [token, setToken] = useState<string | null>(() => localStorage.getItem('aquaculture-token'));
+  const [token, setToken] = useState<string | null>(() => {
+    const stored = localStorage.getItem('aquaculture-token');
+    return stored && stored !== 'null' && stored !== 'undefined' ? stored : null;
+  });
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(() => {
     const stored = localStorage.getItem('aquaculture-user');
     return stored ? JSON.parse(stored) : null;
@@ -343,7 +356,7 @@ function App() {
     senderId: message.senderId || message.sender?.id || '',
     senderName: message.sender?.name || message.sender?.email?.split('@')[0] || 'User',
     senderRole: message.sender?.role === 'OWNER' || message.senderRole === 'OWNER' ? 'OWNER' : 'WORKER',
-    text: message.text || '',
+    text: typeof message.text === 'string' ? message.text : typeof message.message === 'string' ? message.message : '',
     imageUrl: message.imageUrl || null,
     mentions: Array.isArray(message.mentions) ? message.mentions : [],
     createdAt: message.createdAt || new Date().toISOString(),
@@ -431,7 +444,10 @@ function App() {
   useEffect(() => {
     if (token) {
       void loadChatMessages();
+      const interval = window.setInterval(() => void loadChatMessages(), 5000);
+      return () => window.clearInterval(interval);
     }
+    return undefined;
   }, [loadChatMessages, token]);
 
   // Owner harvest recording UI state
@@ -464,7 +480,35 @@ function App() {
 
   const [pondLogForm, setPondLogForm] = useState(defaultPondLogForm);
   const [pondFeedRecommendations, setPondFeedRecommendations] = useState<Record<string, string>>({});
+  const [lastSubmittedPondUpdate, setLastSubmittedPondUpdate] = useState<Record<string, { id: string; title: string; detail: string; date: string; worker: string; type: string }>>({});
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const buildLastPondUpdateEntry = useCallback((pondId: string) => {
+    const summaryValues = [
+      pondLogForm.feedSize ? `Feed ${pondLogForm.feedSize}` : null,
+      pondLogForm.appetite ? `Appetite ${pondLogForm.appetite}` : null,
+      pondLogForm.behavior ? `Behavior ${pondLogForm.behavior}` : null,
+      pondLogForm.ph ? `pH ${pondLogForm.ph}` : null,
+      pondLogForm.dissolvedO2 ? `DO ${pondLogForm.dissolvedO2}` : null,
+      pondLogForm.ammonia ? `NH3 ${pondLogForm.ammonia}` : null,
+      pondLogForm.mortality ? `Mortality ${pondLogForm.mortality}` : null,
+      pondLogForm.avgWeightGrams ? `Avg wt ${pondLogForm.avgWeightGrams}g` : null,
+      pondLogForm.growthComment ? `Growth ${pondLogForm.growthComment}` : null,
+      pondLogForm.waterComment ? `Water ${pondLogForm.waterComment}` : null,
+    ].filter(Boolean) as string[];
+
+    const title = summaryValues.slice(0, 3).join(' • ') || 'Pond update';
+    const detail = summaryValues.slice(3, 8).join(' • ') || 'Latest pond update recorded';
+
+    return {
+      id: `local-update-${pondId}-${Date.now()}`,
+      title,
+      detail,
+      date: new Date().toISOString(),
+      worker: currentUser?.name || currentUser?.email || 'Worker',
+      type: 'Manual update',
+    };
+  }, [currentUser, pondLogForm]);
 
   const resetPondLogForm = () => {
     setPondLogForm({ ...defaultPondLogForm });
@@ -481,30 +525,77 @@ function App() {
   const getInventoryFeedOptions = useCallback(() => data.inventoryItems.filter((item: any) => {
     const category = String(item.category || '').toUpperCase();
     const name = String(item.name || '').toLowerCase();
-    return category === 'FEED' || name.includes('feed');
+    const currentStock = Number(item.currentStock || 0);
+    return (category === 'FEED' || name.includes('feed')) && currentStock > 0;
   }), [data.inventoryItems]);
+
+  const getAvailableFeedInventoryItems = useCallback(() => getInventoryFeedOptions(), [getInventoryFeedOptions]);
+
+  const getAvailableFeedSizes = useCallback(() => {
+    const uniqueSizes = new Set<string>();
+    getAvailableFeedInventoryItems().forEach((item: any) => {
+      const feedSize = getFeedSizeFromInventoryItem(item);
+      if (feedSize) uniqueSizes.add(feedSize);
+    });
+    return [...uniqueSizes].sort((left, right) => {
+      const orderedSizes = ['1mm', '1.5mm', '2mm', '2.5mm', '3mm', '3.5mm', '4mm', '4.5mm'];
+      const leftIndex = orderedSizes.indexOf(left);
+      const rightIndex = orderedSizes.indexOf(right);
+      return (leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex) - (rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex);
+    });
+  }, [getAvailableFeedInventoryItems, getFeedSizeFromInventoryItem]);
 
   const getFeedStockItemForPond = useCallback((pondId: string, inventoryItemId?: string, fallbackFeedSize?: string) => {
     const feedSize = (fallbackFeedSize || pondFeedRecommendations[pondId] || '4mm').toLowerCase();
+    const matchingItems = getAvailableFeedInventoryItems();
     if (inventoryItemId) {
-      return data.inventoryItems.find((item: any) => item.id === inventoryItemId) || null;
+      return matchingItems.find((item: any) => item.id === inventoryItemId) || null;
     }
-    return data.inventoryItems.find((item: any) => {
+    return matchingItems.find((item: any) => {
       const itemSize = getFeedSizeFromInventoryItem(item);
       return itemSize && itemSize.toLowerCase() === feedSize;
     }) || null;
-  }, [data.inventoryItems, getFeedSizeFromInventoryItem, pondFeedRecommendations]);
+  }, [getAvailableFeedInventoryItems, getFeedSizeFromInventoryItem, pondFeedRecommendations]);
+
+  const validateFeedUsage = useCallback((quantityKg: number, inventoryItemId?: string, feedSize?: string) => {
+    if (!quantityKg || quantityKg <= 0) return { item: null, error: null };
+    const matchingItems = getAvailableFeedInventoryItems();
+    let item = matchingItems.find((entry: any) => entry.id === inventoryItemId) || null;
+    if (item && feedSize) {
+      const itemSize = getFeedSizeFromInventoryItem(item);
+      if (itemSize && itemSize.toLowerCase() !== String(feedSize).toLowerCase()) {
+        item = null;
+      }
+    }
+    if (!item && feedSize) {
+      item = matchingItems.find((entry: any) => {
+        const itemSize = getFeedSizeFromInventoryItem(entry);
+        return itemSize && itemSize.toLowerCase() === String(feedSize).toLowerCase();
+      }) || null;
+    }
+    if (!item) {
+      return { item: null, error: `Insufficient feed: ${feedSize || 'Selected feed size'} is not in inventory stock.` };
+    }
+    const stockKg = Number(item.currentStock || 0);
+    if (stockKg < quantityKg) {
+      return { item: null, error: `Insufficient feed: ${item.name} only has ${formatTwoDecimalPlaces(stockKg)} kg available.` };
+    }
+    return { item, error: null };
+  }, [getAvailableFeedInventoryItems, getFeedSizeFromInventoryItem]);
 
   const adjustInventoryForFeedUse = useCallback(async (pondId: string, inventoryItemId: string | undefined, feedSize: string, quantityKg: number) => {
-    if (!token || !quantityKg || quantityKg <= 0) return;
-    const candidateItem = getFeedStockItemForPond(pondId, inventoryItemId, feedSize);
-    if (!candidateItem) return;
+    if (!token || !quantityKg || quantityKg <= 0) return false;
+    const validated = validateFeedUsage(quantityKg, inventoryItemId, feedSize);
+    if (validated.error || !validated.item) {
+      setToastMessage(validated.error || 'Insufficient feed in inventory.');
+      return false;
+    }
     try {
       const response = await fetch(`${apiBaseUrl}/inventory/adjust`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' },
         body: JSON.stringify({
-          itemId: candidateItem.id,
+          itemId: validated.item.id,
           change: -Math.abs(Number(quantityKg)),
           reason: `Feed used in pond ${pondId}`,
         }),
@@ -513,11 +604,15 @@ function App() {
         const bodyText = await response.text().catch(() => '');
         let parsed; try { parsed = JSON.parse(bodyText || '{}'); } catch { parsed = { error: bodyText || response.statusText }; }
         setToastMessage(parsed.error || parsed.message || 'Inventory could not be updated after feed use.');
+        return false;
       }
+      return true;
     } catch (error) {
       console.warn('Failed to deduct inventory after feed use', error);
+      setToastMessage('Failed to deduct feed from inventory.');
+      return false;
     }
-  }, [apiBaseUrl, getFeedStockItemForPond, setToastMessage, token]);
+  }, [apiBaseUrl, setToastMessage, token, validateFeedUsage]);
 
   const buildWorkerEmailFromName = useCallback((fullName: string) => {
     const clean = fullName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
@@ -547,6 +642,18 @@ function App() {
       setPondLogForm((current) => ({ ...current, feedSize: recommended }));
     }
   }, [selectedPond, selectedPondSummary, getRecommendedFeedSize, pondLogForm.feedGrams, pondLogForm.feedKg, pondLogForm.feedSize]);
+
+  useEffect(() => {
+    const availableSizes = getAvailableFeedSizes();
+    const currentSelection = pondLogForm.feedSize || '';
+    if (!currentSelection && availableSizes.length > 0) {
+      setPondLogForm((current) => ({ ...current, feedSize: availableSizes[0], inventoryItemId: current.inventoryItemId && getAvailableFeedInventoryItems().some((item: any) => item.id === current.inventoryItemId) ? current.inventoryItemId : '' }));
+      return;
+    }
+    if (currentSelection && !availableSizes.includes(currentSelection)) {
+      setPondLogForm((current) => ({ ...current, feedSize: availableSizes[0] || '', inventoryItemId: '' }));
+    }
+  }, [getAvailableFeedInventoryItems, getAvailableFeedSizes, pondLogForm.feedSize]);
 
   useEffect(() => {
     function handleInventoryContextDismiss(event: PointerEvent) {
@@ -690,6 +797,11 @@ function App() {
   };
 
   const handleChatSwipeStart = (messageId: string, event: React.PointerEvent<HTMLElement>) => {
+    if (revealedChatId) {
+      setRevealedChatId(null);
+      setChatRevealDirection(null);
+      return;
+    }
     const target = event.currentTarget as HTMLElement & { __chatSwipeStartX?: number };
     target.__chatSwipeStartX = event.clientX;
   };
@@ -854,6 +966,15 @@ function App() {
       fetch(`${apiBaseUrl}/notifications`, { headers }),
     ]);
 
+    if ([farmsRes, pondsRes, feedingsRes, waterRes, mortalityRes, harvestsRes, inventoryRes, tasksRes, financeRes, notificationsRes].some((response) => response.status === 401)) {
+      localStorage.removeItem('aquaculture-token');
+      localStorage.removeItem('aquaculture-user');
+      setToken(null);
+      setCurrentUser(null);
+      setError('Your session expired. Please sign in again.');
+      return;
+    }
+
     const next = { ...emptyState };
     if (farmsRes.ok) next.farms = (await farmsRes.json()).farms || [];
     if (pondsRes.ok) next.ponds = (await pondsRes.json()).ponds || [];
@@ -962,6 +1083,52 @@ function App() {
   }, [theme]);
 
   useEffect(() => {
+    if (!token) return;
+    let active = true;
+    const syncTheme = async () => {
+      try {
+        const response = await fetch(`${apiBaseUrl}/settings/theme`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!response.ok) return;
+        const body = await response.json();
+        if (active && (body.theme === 'light' || body.theme === 'dark')) {
+          setTheme(body.theme);
+        }
+      } catch (error) {
+        console.error('Failed to sync application theme', error);
+      }
+    };
+    void syncTheme();
+    const interval = window.setInterval(() => void syncTheme(), 5000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [apiBaseUrl, token]);
+
+  const handleThemeToggle = async () => {
+    const nextTheme = theme === 'dark' ? 'light' : 'dark';
+    const previousTheme = theme;
+    setTheme(nextTheme);
+    try {
+      const response = await fetch(`${apiBaseUrl}/settings/theme`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token || ''}`,
+        },
+        body: JSON.stringify({ theme: nextTheme }),
+      });
+      if (!response.ok) throw new Error('Theme update failed');
+    } catch (error) {
+      setTheme(previousTheme);
+      console.error('Failed to update application theme', error);
+      setToastMessage('Unable to update the shared theme.');
+    }
+  };
+
+  useEffect(() => {
     const handleResize = () => {
       if (window.innerWidth > 1120) {
         setSidebarOpen(true);
@@ -1004,12 +1171,19 @@ function App() {
 
     const feedGrams = Number(pondLogForm.feedGrams) || Number(pondLogForm.feedKg) || 0;
     const feedKgValue = feedGrams > 0 ? Number((feedGrams / 1000).toFixed(3)) : Number(pondLogForm.feedKg) || 0;
+    const normalizedFeedSize = pondLogForm.feedSize || '4mm';
+    const feedValidation = validateFeedUsage(feedKgValue, pondLogForm.inventoryItemId || undefined, normalizedFeedSize);
+    if (feedKgValue > 0 && (!feedValidation.item || feedValidation.error)) {
+      setToastMessage(feedValidation.error || 'Insufficient feed in inventory.');
+      return;
+    }
+
     const payload = {
       pondId,
       feedKg: feedKgValue,
       feedGrams,
-      feedSize: pondLogForm.feedSize || '4mm',
-      inventoryItemId: pondLogForm.inventoryItemId || undefined,
+      feedSize: normalizedFeedSize,
+      inventoryItemId: feedValidation.item?.id || pondLogForm.inventoryItemId || undefined,
       appetite: pondLogForm.appetite,
       behavior: pondLogForm.behavior,
       ph: pondLogForm.ph,
@@ -1029,6 +1203,9 @@ function App() {
       harvestDestination: pondLogForm.harvestDestination,
     };
 
+    const latestPondUpdateEntry = buildLastPondUpdateEntry(pondId);
+    setLastSubmittedPondUpdate((current) => ({ ...current, [pondId]: latestPondUpdateEntry }));
+
     if (!navigator.onLine) {
       queueOfflineSyncEntry('pond_update', payload, 'pond_daily_log', pondId);
       resetPondLogForm();
@@ -1038,16 +1215,16 @@ function App() {
     const headers = { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' };
     const calls: Promise<Response>[] = [];
 
-    if (feedKgValue > 0) {
+    if (feedKgValue > 0 && feedValidation.item) {
       calls.push(fetch(`${apiBaseUrl}/feedings`, {
         method: 'POST',
         headers,
         body: JSON.stringify({
           pondId,
           quantityKg: feedKgValue,
-          feedSize: pondLogForm.feedSize || '4mm',
-          feedType: data.inventoryItems.find((item) => item.id === pondLogForm.inventoryItemId)?.name || 'Pellet',
-          inventoryItemId: pondLogForm.inventoryItemId || undefined,
+          feedSize: normalizedFeedSize,
+          feedType: feedValidation.item.name || data.inventoryItems.find((item) => item.id === pondLogForm.inventoryItemId)?.name || 'Pellet',
+          inventoryItemId: feedValidation.item.id,
           appetite: Number(pondLogForm.appetite),
           observation: pondLogForm.behavior,
         }),
@@ -1080,7 +1257,7 @@ function App() {
       }));
     }
 
-    if (isOwner && Number(pondLogForm.harvestQuantity) > 0) {
+    if (Number(pondLogForm.harvestQuantity) > 0) {
       const harvestQtyNum = Number(pondLogForm.harvestQuantity);
       if (!Number.isInteger(harvestQtyNum) || harvestQtyNum <= 0) {
         alert('Harvest quantity must be a positive whole number (no fractional fish).');
@@ -1109,8 +1286,6 @@ function App() {
           }
         }
       }
-    } else if (Number(pondLogForm.harvestQuantity) > 0) {
-      setToastMessage('Only owners may record harvests. Contact your manager.');
     }
 
     try {
@@ -1237,6 +1412,43 @@ function App() {
     return data.tasks.find((task) => task.id === selectedTaskId) || data.tasks[0];
   }, [data.tasks, selectedTaskId]);
 
+  const visiblePonds = useMemo(() => {
+    if (isOwner) return data.ponds;
+    const currentUserId = currentUser?.id;
+    const recentPondIds = new Set<string>();
+    if (currentUserId) {
+      data.feedings.forEach((entry) => {
+        const workerId = entry.workerId || entry.worker?.id;
+        if (workerId === currentUserId) recentPondIds.add(entry.pondId);
+      });
+      data.waterLogs.forEach((entry) => {
+        const workerId = entry.workerId || entry.worker?.id;
+        if (workerId === currentUserId) recentPondIds.add(entry.pondId);
+      });
+      data.mortalityLogs.forEach((entry) => {
+        const workerId = entry.workerId || entry.worker?.id;
+        if (workerId === currentUserId) recentPondIds.add(entry.pondId);
+      });
+    }
+
+    const assignedPondIds = new Set(
+      data.ponds
+        .filter((pond) => {
+          const assignedUserId = String(pond.assignedUserId || '').trim();
+          const assignedUserEmail = String(pond.assignedUser?.email || '').trim();
+          const assignedUserName = String(pond.assignedUser?.name || '').trim();
+          const allWorkersAssigned = !pond.assignedUserId || assignedUserId === 'all' || assignedUserEmail === 'all' || assignedUserName === 'all';
+          return allWorkersAssigned
+            || pond.assignedUserId === currentUserId
+            || pond.assignedUser?.id === currentUserId
+            || pond.assignedUser?.email === currentUser?.email;
+        })
+        .map((pond) => pond.id)
+    );
+
+    return data.ponds.filter((pond) => assignedPondIds.has(pond.id) || recentPondIds.has(pond.id));
+  }, [currentUser, data.feedings, data.mortalityLogs, data.ponds, data.waterLogs, isOwner]);
+
   const overview = useMemo(() => {
     const totalFeed = data.feedings.reduce((sum, item) => sum + Number(item.quantityKg || 0), 0);
     const totalMortality = data.mortalityLogs.reduce((sum, item) => sum + Number(item.numberDead || 0), 0);
@@ -1300,13 +1512,18 @@ function App() {
   }, [data, reportRange, workers]);
 
   const buildWorkerReportSummary = useCallback((user: CurrentUser | any) => {
+    const recentPondIds = new Set<string>([
+      ...data.feedings.filter((entry) => (entry.workerId || entry.worker?.id) === user.id).map((entry) => entry.pondId),
+      ...data.waterLogs.filter((entry) => (entry.workerId || entry.worker?.id) === user.id).map((entry) => entry.pondId),
+      ...data.mortalityLogs.filter((entry) => (entry.workerId || entry.worker?.id) === user.id).map((entry) => entry.pondId),
+    ]);
     const myPondIds = new Set(
       data.ponds
         .filter((pond) => {
           const assignedUserId = pond.assignedUserId || pond.assignedUser?.id;
           const assignedEmail = pond.assignedUser?.email;
           const assignedName = pond.assignedUser?.name;
-          return assignedUserId === user.id || assignedEmail === user.email || assignedName === user.name;
+          return assignedUserId === user.id || assignedEmail === user.email || assignedName === user.name || recentPondIds.has(pond.id);
         })
         .map((pond) => pond.id)
     );
@@ -1543,12 +1760,15 @@ function App() {
       }
       if (selectedAnalyticsRange === 'weekly') {
         const diffDays = Math.floor((now.getTime() - value.getTime()) / 86400000);
-        return Math.min(rangeLength - 1, Math.max(0, Math.floor(diffDays / 7)));
+        const age = Math.min(rangeLength - 1, Math.max(0, Math.floor(diffDays / 7)));
+        return rangeLength - 1 - age;
       }
       if (selectedAnalyticsRange === 'monthly') {
-        return Math.min(rangeLength - 1, Math.max(0, (now.getFullYear() - value.getFullYear()) * 12 + (now.getMonth() - value.getMonth())));
+        const age = Math.min(rangeLength - 1, Math.max(0, (now.getFullYear() - value.getFullYear()) * 12 + (now.getMonth() - value.getMonth())));
+        return rangeLength - 1 - age;
       }
-      return Math.min(rangeLength - 1, Math.max(0, (now.getFullYear() - value.getFullYear()) * 12 + (now.getMonth() - value.getMonth())));
+      const age = Math.min(rangeLength - 1, Math.max(0, (now.getFullYear() - value.getFullYear()) * 12 + (now.getMonth() - value.getMonth())));
+      return rangeLength - 1 - age;
     };
 
     const addValue = (dateValue: Date | string | undefined, amount: number) => {
@@ -1561,29 +1781,25 @@ function App() {
       }
     };
 
-    data.feedings.forEach((item) => addValue(item.createdAt, Number(item.quantityKg || 0)));
-    data.mortalityLogs.forEach((item) => addValue(item.createdAt, Number(item.numberDead || 0)));
+    data.feedings.forEach((item) => addValue(item.date || item.createdAt, Number(item.quantityKg || 0)));
+    data.mortalityLogs.forEach((item) => addValue(item.observedAt || item.createdAt, Number(item.numberDead || 0)));
     data.financeRecords.forEach((item) => {
-      if (item.type === 'SALES' || item.type === 'INCOME') addValue(item.recordedAt, Number(item.amount || 0));
-      if (item.type === 'RUNNING_COST' || item.type === 'EXPENSE') addValue(item.recordedAt, -Number(item.amount || 0));
-      if (item.type === 'FIXED_COST' || item.type === 'BUDGET') addValue(item.recordedAt, 0);
+      if (item.type === 'SALES' || item.type === 'INCOME') addValue(item.recordedAt || item.createdAt, Number(item.amount || 0));
+      if (item.type === 'RUNNING_COST' || item.type === 'EXPENSE') addValue(item.recordedAt || item.createdAt, -Number(item.amount || 0));
+      if (item.type === 'FIXED_COST' || item.type === 'BUDGET') addValue(item.recordedAt || item.createdAt, 0);
     });
     data.ponds.forEach((pond) => addValue(pond.stockedAt || pond.createdAt, 1));
     data.tasks.forEach((task) => addValue(task.createdAt || task.dueAt, 1));
 
     const selectedMetric = selectedAnalyticsMetric;
-    const normalized = buckets.map((bucket) => {
+    const normalized = buckets.map((bucket, bucketIndex) => {
       let value = bucket.value;
       if (selectedMetric === 'health') {
         const mortality = data.mortalityLogs.filter((item) => {
-          const recordDate = new Date(item.createdAt || 0);
-          return selectedAnalyticsRange === 'daily' ? recordDate.toDateString() === bucket.date.toDateString() :
-            recordDate.getMonth() === bucket.date.getMonth() && recordDate.getFullYear() === bucket.date.getFullYear();
+          return bucketIndexFor(new Date(item.observedAt || item.createdAt || 0)) === bucketIndex;
         }).reduce((sum, item) => sum + Number(item.numberDead || 0), 0);
         const feed = data.feedings.filter((item) => {
-          const recordDate = new Date(item.createdAt || 0);
-          return selectedAnalyticsRange === 'daily' ? recordDate.toDateString() === bucket.date.toDateString() :
-            recordDate.getMonth() === bucket.date.getMonth() && recordDate.getFullYear() === bucket.date.getFullYear();
+          return bucketIndexFor(new Date(item.date || item.createdAt || 0)) === bucketIndex;
         }).reduce((sum, item) => sum + Number(item.quantityKg || 0), 0);
         value = Math.max(50, Math.min(100, 100 - (mortality * 4) + Math.min(feed, 30)));
       }
@@ -1598,13 +1814,9 @@ function App() {
       }
       if (selectedMetric === 'ponds') {
         const count = data.ponds.filter((pond) => {
-          const recordDate = new Date(pond.stockedAt || pond.createdAt || 0);
-          return selectedAnalyticsRange === 'daily' ? recordDate.toDateString() === bucket.date.toDateString() :
-            recordDate.getMonth() === bucket.date.getMonth() && recordDate.getFullYear() === bucket.date.getFullYear();
+          return bucketIndexFor(new Date(pond.stockedAt || pond.createdAt || 0)) === bucketIndex;
         }).length + data.tasks.filter((task) => {
-          const recordDate = new Date(task.createdAt || task.dueAt || 0);
-          return selectedAnalyticsRange === 'daily' ? recordDate.toDateString() === bucket.date.toDateString() :
-            recordDate.getMonth() === bucket.date.getMonth() && recordDate.getFullYear() === bucket.date.getFullYear();
+          return bucketIndexFor(new Date(task.createdAt || task.dueAt || 0)) === bucketIndex;
         }).length;
         value = count || Math.min(4, Math.max(1, Math.round((Math.abs(value) || 1) / 2)));
       }
@@ -1694,11 +1906,54 @@ function App() {
   async function openPond(pondId: string) {
     if (!token) return;
     setSelectedPondId(pondId);
-    const response = await fetch(`${apiBaseUrl}/ponds/${pondId}`, { headers: { Authorization: token ? 'Bearer ' + token : '' } });
-    if (!response.ok) return;
-    const body = await response.json();
-    setSelectedPond(body.pond);
-    setSelectedPondSummary(body.summary);
+
+    const fallbackPond = data.ponds.find((pond) => pond.id === pondId) || null;
+    if (fallbackPond) {
+      setSelectedPond(fallbackPond);
+      setSelectedPondSummary((current: any) => current ?? {
+        currentLive: Number(fallbackPond.current_population ?? fallbackPond.initial_population ?? 0),
+        totalMortality: 0,
+        totalFeedKg: 0,
+        totalHarvested: 0,
+        growthHistory: Array.isArray(fallbackPond.growthMeasurements) ? fallbackPond.growthMeasurements : [],
+        harvest: null,
+        latestFeedSize: fallbackPond.latestFeedSize || null,
+        recommendedFeedSize: null,
+      });
+    }
+
+    try {
+      const response = await fetch(`${apiBaseUrl}/ponds/${pondId}`, { headers: { Authorization: token ? 'Bearer ' + token : '' } });
+      if (!response.ok) {
+        if (!fallbackPond) {
+          setSelectedPond(null);
+          setSelectedPondSummary(null);
+        }
+        return;
+      }
+
+      const body = await response.json().catch(() => ({}));
+      const nextPond = body.pond ?? fallbackPond;
+      const nextSummary = body.summary ?? {
+        currentLive: Number(nextPond?.current_population ?? nextPond?.initial_population ?? 0),
+        totalMortality: 0,
+        totalFeedKg: 0,
+        totalHarvested: 0,
+        growthHistory: Array.isArray(nextPond?.growthMeasurements) ? nextPond.growthMeasurements : [],
+        harvest: null,
+        latestFeedSize: nextPond?.latestFeedSize || null,
+        recommendedFeedSize: null,
+      };
+
+      setSelectedPond(nextPond ?? null);
+      setSelectedPondSummary(nextSummary ?? null);
+    } catch (error) {
+      console.warn('Failed to open pond detail', error);
+      if (!fallbackPond) {
+        setSelectedPond(null);
+        setSelectedPondSummary(null);
+      }
+    }
   }
 
   const applyRecommendedFeedSize = useCallback(async (pondId: string, recommendedSize: string) => {
@@ -1734,7 +1989,7 @@ function App() {
 
   async function handleTargetHarvestActionSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!token || !isOwner) return;
+    if (!token) return;
 
     const pondId = targetHarvestAction.pondId || selectedPondId || '';
     if (!pondId || !targetHarvestAction.date) {
@@ -1765,7 +2020,7 @@ function App() {
 
   async function handleRecommendFeedActionSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!token || !isOwner) return;
+    if (!token) return;
 
     const pondId = recommendFeedAction.pondId || selectedPondId || '';
     if (!pondId) {
@@ -1773,20 +2028,22 @@ function App() {
       return;
     }
 
-    const item = data.inventoryItems.find((entry) => entry.id === recommendFeedAction.inventoryItemId);
-    const quantityKg = Number(recommendFeedAction.quantityKg) || 1;
-    const response = await fetch(`${apiBaseUrl}/feedings`, {
-      method: 'POST',
+    const availableFeedItems = getAvailableFeedInventoryItems();
+    if (availableFeedItems.length === 0) {
+      setToastMessage('No feed is currently available in inventory.');
+      return;
+    }
+    const feedSize = getAvailableFeedSizes().includes(recommendFeedAction.feedSize)
+      ? recommendFeedAction.feedSize
+      : getAvailableFeedSizes()[0];
+    if (!feedSize) {
+      setToastMessage('Choose a feed size that is currently available in inventory.');
+      return;
+    }
+    const response = await fetch(`${apiBaseUrl}/ponds/${pondId}`, {
+      method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' },
-      body: JSON.stringify({
-        pondId,
-        quantityKg,
-        feedSize: recommendFeedAction.feedSize || '1mm',
-        feedType: item?.name || 'Pellet',
-        inventoryItemId: recommendFeedAction.inventoryItemId || undefined,
-        appetite: 5,
-        observation: 'Admin recommended feed adjustment',
-      }),
+      body: JSON.stringify({ recommendedFeedSize: feedSize }),
     });
 
     if (!response.ok) {
@@ -1798,14 +2055,14 @@ function App() {
 
     setAdminActionModal(null);
     setRecommendFeedAction({ pondId: '', inventoryItemId: '', feedSize: '1mm', quantityKg: '1' });
-    setToastMessage('Feed recommendation recorded.');
+    setToastMessage(`Feed size ${feedSize} recommended.`);
     await refreshDashboard();
     if (selectedPondId === pondId) await openPond(pondId);
   }
 
   async function handleMortalityActionSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!token || !isOwner) return;
+    if (!token) return;
 
     const pondId = mortalityAction.pondId || selectedPondId || '';
     const count = Number(mortalityAction.count) || 0;
@@ -1910,22 +2167,16 @@ function App() {
     const allSites = data.farms.flatMap((farm) => farm.sites || []);
     let site = allSites.find((item) => String(item.name || '').trim().toLowerCase() === siteKey);
     if (!site) {
-      const siteRes = await fetch(`${apiBaseUrl}/sites`, { method: 'POST', headers, body: JSON.stringify({ name: siteName }) });
-      const siteBody = await siteRes.json().catch(() => ({}));
-      if (!siteRes.ok) {
-        const farmRes = await fetch(`${apiBaseUrl}/farms`, { method: 'POST', headers, body: JSON.stringify({ name: siteName }) });
-        const farmBody = await farmRes.json().catch(() => ({}));
-        if (!farmRes.ok) {
-          setToastMessage(siteBody.error || farmBody.error || 'Unable to create the site for this pond.');
-          return;
-        }
-        site = farmBody.farm?.sites?.[0] || null;
-        if (!site) {
-          setToastMessage('Unable to create the site for this pond.');
-          return;
-        }
-      } else {
-        site = siteBody.site;
+      const farmRes = await fetch(`${apiBaseUrl}/farms`, { method: 'POST', headers, body: JSON.stringify({ name: siteName }) });
+      const farmBody = await farmRes.json().catch(() => ({}));
+      if (!farmRes.ok) {
+        setToastMessage(farmBody.error || 'Unable to create the site for this pond.');
+        return;
+      }
+      site = farmBody.farm?.sites?.[0] || null;
+      if (!site) {
+        setToastMessage('The site was created without a usable site record.');
+        return;
       }
     }
 
@@ -2129,7 +2380,7 @@ function App() {
   // owner-only: record harvest form handling and undo
   async function handleRecordHarvestSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!token || !isOwner || !selectedPondId) return;
+    if (!token || !selectedPondId) return;
     const num = Number(harvestForm.numberHarvested);
     if (!Number.isInteger(num) || num <= 0) { setToastMessage('Enter a positive whole number for harvested fish'); return; }
     const body = {
@@ -2160,7 +2411,7 @@ function App() {
   }
 
   async function handleUpdateHarvest(harvestId: string, payload: { numberHarvested?: number; avgWeightGrams?: number | null; biomassKg?: number | null; method?: string | null; destination?: string | null }) {
-    if (!token || !isOwner) return;
+    if (!token) return;
     try {
       const response = await fetch(`${apiBaseUrl}/harvests/${harvestId}`, {
         method: 'PUT',
@@ -2489,6 +2740,29 @@ function App() {
     await loadWorkerRoster();
   }
 
+  async function handleAssignPondToWorker(pondId: string, workerId: string) {
+    if (!token || !isOwner || !pondId) return;
+    const normalizedWorkerId = workerId === 'all' ? undefined : workerId;
+
+    const response = await fetch(`${apiBaseUrl}/ponds/${pondId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' },
+      body: JSON.stringify({ assignedUserId: normalizedWorkerId }),
+    });
+
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setToastMessage(body.error || body.message || 'Unable to assign the pond.');
+      return;
+    }
+
+    setToastMessage(workerId === 'all' ? 'Pond assigned to all workers.' : 'Pond assigned to worker.');
+    await refreshDashboard();
+    if (selectedPondId === pondId) {
+      await openPond(pondId);
+    }
+  }
+
   function beginSwipeReveal(type: 'finance' | 'worker' | 'inventory' | 'task' | 'pond', id: string, event: React.PointerEvent<HTMLElement>) {
     const clientX = event.clientX;
     swipeGuardRef.current = false;
@@ -2562,90 +2836,7 @@ function App() {
   async function handleWorkerPondLog(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!token || !selectedPondId) return;
-
-    const feedGrams = Number(pondLogForm.feedGrams) || Number(pondLogForm.feedKg) || 0;
-    const feedKgValue = feedGrams > 0 ? Number((feedGrams / 1000).toFixed(3)) : Number(pondLogForm.feedKg) || 0;
-
-    if (!navigator.onLine) {
-      const payload = {
-        pondId: selectedPondId,
-        feedKg: feedKgValue,
-        feedGrams,
-        feedSize: pondLogForm.feedSize || '4mm',
-        appetite: pondLogForm.appetite,
-        behavior: pondLogForm.behavior,
-        ph: pondLogForm.ph,
-        dissolvedO2: pondLogForm.dissolvedO2,
-        ammonia: pondLogForm.ammonia,
-        waterAddedPercent: pondLogForm.waterAddedPercent,
-        waterRemovedPercent: pondLogForm.waterRemovedPercent,
-        waterComment: pondLogForm.waterComment,
-        mortality: pondLogForm.mortality,
-        mortalityCause: pondLogForm.mortalityCause,
-        avgWeightGrams: pondLogForm.avgWeightGrams,
-        growthComment: pondLogForm.growthComment,
-        harvestQuantity: pondLogForm.harvestQuantity,
-        harvestAvgWeight: pondLogForm.harvestAvgWeight,
-        harvestBiomassKg: pondLogForm.harvestBiomassKg,
-        harvestMethod: pondLogForm.harvestMethod,
-        harvestDestination: pondLogForm.harvestDestination,
-      };
-      queueOfflineSyncEntry('pond_update', payload, 'pond_daily_log', selectedPondId);
-      resetPondLogForm();
-      return;
-    }
-
-    const headers = { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' };
-    const calls: Promise<Response>[] = [];
-
-    if (Number(pondLogForm.feedKg) > 0) {
-      calls.push(fetch(`${apiBaseUrl}/feedings`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          pondId: selectedPondId,
-          quantityKg: Number(pondLogForm.feedKg),
-          inventoryItemId: pondLogForm.inventoryItemId || undefined,
-          feedType: data.inventoryItems.find((item) => item.id === pondLogForm.inventoryItemId)?.name || 'Pellet',
-          feedSize: pondLogForm.feedSize || '4mm',
-          appetite: Number(pondLogForm.appetite),
-          observation: pondLogForm.behavior,
-        }),
-      }));
-    }
-
-    calls.push(fetch(`${apiBaseUrl}/water-quality`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        pondId: selectedPondId,
-        ph: Number(pondLogForm.ph) || undefined,
-        dissolvedO2: Number(pondLogForm.dissolvedO2) || undefined,
-        ammonia: Number(pondLogForm.ammonia) || undefined,
-        waterAddedPercent: Number(pondLogForm.waterAddedPercent) || 0,
-        waterRemovedPercent: Number(pondLogForm.waterRemovedPercent) || 0,
-        comment: pondLogForm.waterComment || 'Worker pond update',
-      }),
-    }));
-
-    if (Number(pondLogForm.mortality) > 0) {
-      calls.push(fetch(`${apiBaseUrl}/mortality`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          pondId: selectedPondId,
-          numberDead: Number(pondLogForm.mortality),
-          possibleCause: pondLogForm.mortalityCause || 'Unspecified',
-        }),
-      }));
-    }
-
-    const results = await Promise.all(calls);
-    if (results.every((result) => result.ok)) {
-      resetPondLogForm();
-      await refreshDashboard();
-      await openPond(selectedPondId);
-    }
+    await submitPondUpdateForPond(selectedPondId);
   }
 
   if (!token) {
@@ -3234,7 +3425,7 @@ function App() {
                 <span>{data.notifications.filter((item) => !item.read).length}</span>
               </button>
             </div>
-            <button type="button" className="secondary-btn theme-toggle-btn" aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} onClick={() => setTheme((value) => value === 'dark' ? 'light' : 'dark')}>
+            <button type="button" className="secondary-btn theme-toggle-btn" aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} onClick={() => void handleThemeToggle()}>
               {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
               {theme === 'dark' ? 'Light' : 'Dark'}
             </button>
@@ -3257,14 +3448,14 @@ function App() {
             <section className="metrics-grid">
               {(isOwner ? [
                 { key: 'health', label: 'Farm health', value: `${overview.healthScore}%`, detail: 'Based on mortality and water risk', icon: Activity, tone: 'blue' },
-                { key: 'feed', label: 'Feed logged', value: `${overview.totalFeed || 0} kg`, detail: overview.latestFeedSize !== 'Not recorded' ? `Size used: ${overview.latestFeedSize}` : 'No feed size logged yet', icon: Sprout, tone: 'green' },
+                { key: 'feed', label: 'Feed logged', value: `${formatTwoSignificantFigures(Number(overview.totalFeed || 0))} kg`, detail: overview.latestFeedSize !== 'Not recorded' ? `Size used: ${overview.latestFeedSize}` : 'No feed size logged yet', icon: Sprout, tone: 'green' },
                 { key: 'mortality', label: 'Mortality', value: `${overview.totalMortality || 0} fish`, detail: 'Stored mortality records', icon: AlertTriangle, tone: 'orange' },
                 { key: 'profit', label: 'Net position', value: formatDalasi(Number(overview.finance.netProfitLoss ?? overview.finance.profit ?? 0)), detail: overview.finance.status === 'PROFIT' ? 'Running profit' : overview.finance.status === 'LOSS' ? 'Running loss' : 'Break-even', icon: overview.finance.status === 'PROFIT' ? TrendingUp : TrendingDown, tone: overview.finance.status === 'PROFIT' ? 'green' : 'orange' },
               ] : [
                 { key: 'health', label: 'Farm health', value: `${overview.healthScore}%`, detail: 'Based on job activity', icon: Activity, tone: 'blue' },
-                { key: 'feed', label: 'Feed logged', value: `${overview.totalFeed || 0} kg`, detail: 'Your assigned pond activity', icon: Sprout, tone: 'green' },
+                { key: 'feed', label: 'Feed logged', value: `${formatTwoSignificantFigures(Number(overview.totalFeed || 0))} kg`, detail: 'Your assigned pond activity', icon: Sprout, tone: 'green' },
                 { key: 'mortality', label: 'Mortality', value: `${overview.totalMortality || 0} fish`, detail: 'Recent farm alerts', icon: AlertTriangle, tone: 'orange' },
-                { key: 'ponds', label: 'My ponds', value: String(data.ponds.length), detail: 'Assigned to you', icon: Fish, tone: 'navy' },
+                { key: 'ponds', label: 'My ponds', value: String(visiblePonds.length), detail: 'Assigned to you', icon: Fish, tone: 'navy' },
               ]).map((metric) => (
                 <Metric
                   key={metric.key}
@@ -3475,15 +3666,6 @@ function App() {
                 </div>
 
                 <div className="report-grid">
-                  <Panel eyebrow="Finance" title="Financial overview" className="reveal-card report-panel" style={{ animationDelay: '50ms' }}>
-                    <div className="report-stack">
-                      <div className="report-stat-row"><span>Sales</span><strong>{formatDalasi(reportSummary.sales)}</strong></div>
-                      <div className="report-stat-row"><span>Running costs</span><strong>{formatDalasi(reportSummary.runningCosts)}</strong></div>
-                      <div className="report-stat-row"><span>Fixed costs</span><strong>{formatDalasi(reportSummary.fixedCosts)}</strong></div>
-                      <div className="report-stat-row highlight"><span>Net position</span><strong>{formatDalasi((reportSummary.sales || 0) - (reportSummary.runningCosts || 0) - (reportSummary.fixedCosts || 0))}</strong></div>
-                    </div>
-                  </Panel>
- 
                   <Panel eyebrow="Ponds" title="Pond performance" className="reveal-card report-panel" style={{ animationDelay: '100ms' }}>
                     <div className="report-stack">
                       <div className="report-stat-row"><span>Active ponds</span><strong>{reportSummary.activePonds}</strong></div>
@@ -3503,7 +3685,7 @@ function App() {
                     </div>
                   </Panel>
  
-                  <Panel eyebrow="Workers" title="Worker performance" className="reveal-card report-panel" style={{ animationDelay: '200ms' }}>
+                  <Panel eyebrow="Workers" title="Worker performance" className="reveal-card report-panel performance-report-panel" style={{ animationDelay: '200ms' }}>
                     <div className="report-worker-list">
                       {reportSummary.workerPerformance.slice(0, 5).map((worker) => (
                         <div key={worker.name} className="report-worker-item">
@@ -3518,10 +3700,10 @@ function App() {
                   </Panel>
 
                   {ownerPerformanceSummary ? (
-                    <Panel eyebrow="Admin" title={`${ownerPerformanceSummary.name} performance`} className="reveal-card report-panel admin-performance-panel" style={{ animationDelay: '240ms' }}>
+                    <Panel eyebrow="Admin" title={`${ownerPerformanceSummary.name} performance`} className="reveal-card report-panel admin-performance-panel performance-report-panel" style={{ animationDelay: '240ms' }}>
                       <div className="report-stack">
                         <div className="report-stat-row"><span>Activities logged</span><strong>{ownerPerformanceSummary.totalRecords}</strong></div>
-                        <div className="report-stat-row"><span>Feed logged</span><strong>{ownerPerformanceSummary.feedLogged} kg</strong></div>
+                        <div className="report-stat-row"><span>Feed logged</span><strong>{formatTwoSignificantFigures(ownerPerformanceSummary.feedLogged)} kg</strong></div>
                         <div className="report-stat-row"><span>Harvested fish</span><strong>{ownerPerformanceSummary.harvestedFish}</strong></div>
                         <div className="report-stat-row"><span>Mortality</span><strong>{ownerPerformanceSummary.mortality}</strong></div>
                         <div className="report-stat-row"><span>Tasks</span><strong>{ownerPerformanceSummary.tasksCompleted} complete / {ownerPerformanceSummary.tasksPending} pending</strong></div>
@@ -3561,9 +3743,9 @@ function App() {
                     <Panel key={workerSummary.id || workerSummary.name} eyebrow="Worker report" title={workerSummary.name} className="reveal-card report-panel" style={{ animationDelay: `${220 + index * 40}ms` }}>
                       <div className="report-stack">
                         <div className="report-stat-row"><span>Assigned ponds</span><strong>{workerSummary.assignedPonds}</strong></div>
-                        <div className="report-stat-row"><span>Feed logged</span><strong>{workerSummary.feedLogged} kg</strong></div>
+                        <div className="report-stat-row"><span>Feed logged</span><strong>{formatTwoSignificantFigures(workerSummary.feedLogged)} kg</strong></div>
                         <div className="report-stat-row"><span>Mortality</span><strong>{workerSummary.mortality}</strong></div>
-                        <div className="report-stat-row"><span>Current stock</span><strong>{workerSummary.currentStock}</strong></div>
+                        <div className="report-stat-row"><span>Current stock</span><strong>{formatTwoDecimalPlaces(Number(workerSummary.currentStock || 0))}</strong></div>
                         <div className="report-stat-row"><span>Assigned tasks</span><strong>{workerSummary.tasksAssigned}</strong></div>
                         <div className="report-stat-row"><span>Completed / pending</span><strong>{workerSummary.tasksCompleted} / {workerSummary.tasksPending}</strong></div>
                         <div className="report-stat-row"><span>Harvested fish</span><strong>{workerSummary.harvestedFish}</strong></div>
@@ -3609,7 +3791,7 @@ function App() {
                   </div>
                   <div className="report-metric-card reveal-card" style={{ animationDelay: '90ms' }}>
                     <span className="metric-label">Feed logged</span>
-                    <strong>{workerReportSummary ? `${workerReportSummary.feedLogged} kg` : '0 kg'}</strong>
+                    <strong>{workerReportSummary ? `${formatTwoDecimalPlaces(Number(workerReportSummary.feedLogged || 0))} kg` : '0.00 kg'}</strong>
                     <small>Latest size: {workerReportSummary?.latestFeedSize || 'Not recorded'}</small>
                   </div>
                   <div className="report-metric-card reveal-card" style={{ animationDelay: '140ms' }}>
@@ -3624,7 +3806,7 @@ function App() {
                   </div>
                   <div className="report-metric-card reveal-card" style={{ animationDelay: '240ms' }}>
                     <span className="metric-label">Current stock</span>
-                    <strong>{workerReportSummary?.currentStock ?? 0}</strong>
+                    <strong>{formatTwoDecimalPlaces(Number(workerReportSummary?.currentStock ?? 0))}</strong>
                     <small>Live fish in assigned ponds</small>
                   </div>
                   <div className="report-metric-card reveal-card" style={{ animationDelay: '290ms' }}>
@@ -3638,8 +3820,8 @@ function App() {
                   <Panel eyebrow="My ponds" title="Pond workload" className="reveal-card report-panel" style={{ animationDelay: '50ms' }}>
                     <div className="report-stack">
                       <div className="report-stat-row"><span>Assigned ponds</span><strong>{workerReportSummary?.assignedPonds ?? 0}</strong></div>
-                      <div className="report-stat-row"><span>Feed logged</span><strong>{workerReportSummary ? `${workerReportSummary.feedLogged} kg` : '0 kg'}</strong></div>
-                      <div className="report-stat-row"><span>Current stock</span><strong>{workerReportSummary?.currentStock ?? 0}</strong></div>
+                      <div className="report-stat-row"><span>Feed logged</span><strong>{workerReportSummary ? `${formatTwoDecimalPlaces(Number(workerReportSummary.feedLogged || 0))} kg` : '0.00 kg'}</strong></div>
+                      <div className="report-stat-row"><span>Current stock</span><strong>{formatTwoDecimalPlaces(Number(workerReportSummary?.currentStock ?? 0))}</strong></div>
                       <div className="report-stat-row highlight"><span>Mortality</span><strong>{workerReportSummary?.mortality ?? 0}</strong></div>
                     </div>
                   </Panel>
@@ -3656,7 +3838,7 @@ function App() {
                   <Panel eyebrow="Operations" title="Daily execution" className="reveal-card report-panel" style={{ animationDelay: '150ms' }}>
                     <div className="report-stack">
                       <div className="report-stat-row"><span>Latest feed size</span><strong>{workerReportSummary?.latestFeedSize || 'Not recorded'}</strong></div>
-                      <div className="report-stat-row"><span>Feed logged</span><strong>{workerReportSummary ? `${workerReportSummary.feedLogged} kg` : '0 kg'}</strong></div>
+                      <div className="report-stat-row"><span>Feed logged</span><strong>{workerReportSummary ? `${formatTwoSignificantFigures(workerReportSummary.feedLogged)} kg` : '0 kg'}</strong></div>
                       <div className="report-stat-row"><span>Fish lost</span><strong>{workerReportSummary?.mortality ?? 0}</strong></div>
                       <div className="report-stat-row"><span>Harvest count</span><strong>{workerReportSummary?.harvestedFish ?? 0}</strong></div>
                     </div>
@@ -3847,7 +4029,7 @@ function App() {
                 </>
               ) : null}
               <div className="pond-grid">
-                {data.ponds.map((pond) => (
+                {visiblePonds.map((pond) => (
                   <div
                     key={pond.id}
                     className={`swipe-delete-shell ${revealedSwipeAction?.type === 'pond' && revealedSwipeAction.id === pond.id ? 'revealed' : ''}`}
@@ -3900,27 +4082,44 @@ function App() {
                               ))}
                             </div>
             </Panel>
-            <Panel eyebrow="Admin tools" title="Quick actions">
+            <Panel eyebrow="Quick actions" title={isOwner ? 'Farm updates' : 'Pond updates'}>
               <div className="admin-action-grid">
-                <button type="button" className="admin-action-card" onClick={() => { setQuickPondUpdateOpen(true); setAdminPondQuickUpdateId((current) => current || selectedPondId || data.ponds[0]?.id || ''); }}>
+                <button type="button" className="admin-action-card" onClick={() => { setQuickPondUpdateOpen(true); setAdminPondQuickUpdateId((current) => current || selectedPondId || visiblePonds[0]?.id || ''); }}>
                   <span>Update pond</span>
                 </button>
-                <button type="button" className="admin-action-card" onClick={() => { setAdminActionModal({ type: 'restock' }); setAdminPondQuickUpdateId((current) => current || selectedPondId || data.ponds[0]?.id || ''); }}>
+                <button type="button" className="admin-action-card" onClick={() => { setAdminActionModal({ type: 'restock' }); setAdminPondQuickUpdateId((current) => current || selectedPondId || visiblePonds[0]?.id || ''); }}>
                   <span>Restock</span>
                 </button>
-                <button type="button" className="admin-action-card" onClick={() => { setAdminActionModal({ type: 'targetHarvest' }); setTargetHarvestAction((current) => ({ ...current, pondId: current.pondId || selectedPondId || data.ponds[0]?.id || '' })); }}>
+                <button type="button" className="admin-action-card" onClick={() => { setAdminActionModal({ type: 'targetHarvest' }); setTargetHarvestAction((current) => ({ ...current, pondId: current.pondId || selectedPondId || visiblePonds[0]?.id || '' })); }}>
                   <span>Set target harvest</span>
                 </button>
-                <button type="button" className="admin-action-card" onClick={() => { setAdminActionModal({ type: 'harvestQuantity' }); setHarvestQuantityAction((current) => ({ ...current, pondId: current.pondId || selectedPondId || data.ponds[0]?.id || '' })); }}>
+                <button type="button" className="admin-action-card" onClick={() => { setAdminActionModal({ type: 'harvestQuantity' }); setHarvestQuantityAction((current) => ({ ...current, pondId: current.pondId || selectedPondId || visiblePonds[0]?.id || '' })); }}>
                   <span>Harvest quantity</span>
                 </button>
-                <button type="button" className="admin-action-card" onClick={() => { setAdminActionModal({ type: 'recommendFeed' }); setRecommendFeedAction((current) => ({ ...current, pondId: current.pondId || selectedPondId || data.ponds[0]?.id || '' })); }}>
+                <button type="button" className="admin-action-card" onClick={() => { setAdminActionModal({ type: 'recommendFeed' }); setRecommendFeedAction((current) => ({ ...current, pondId: current.pondId || selectedPondId || visiblePonds[0]?.id || '' })); }}>
                   <span>Recommend feed</span>
                 </button>
-                <button type="button" className="admin-action-card" onClick={() => { setAdminActionModal({ type: 'mortality' }); setMortalityAction((current) => ({ ...current, pondId: current.pondId || selectedPondId || data.ponds[0]?.id || '' })); }}>
+                <button type="button" className="admin-action-card" onClick={() => { setAdminActionModal({ type: 'mortality' }); setMortalityAction((current) => ({ ...current, pondId: current.pondId || visiblePonds[0]?.id || '' })); }}>
                   <span>Record mortality</span>
                 </button>
               </div>
+
+              {selectedPondId ? (
+                <div className="admin-assignment-row" style={{ marginTop: 14 }}>
+                  <label className="worker-field full-width">
+                    <span>Assign selected pond</span>
+                    <select
+                      value={selectedPond?.assignedUserId || selectedPond?.assignedUser?.id || 'all'}
+                      onChange={(event) => void handleAssignPondToWorker(selectedPondId, event.target.value)}
+                    >
+                      <option value="all">All workers</option>
+                      {workers.map((worker) => (
+                        <option key={worker.id} value={worker.id}>{worker.name || worker.email}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              ) : null}
             </Panel>
 
             {quickPondUpdateOpen ? (
@@ -3946,27 +4145,34 @@ function App() {
                       <span>Select pond</span>
                       <select value={adminPondQuickUpdateId} onChange={(event) => setAdminPondQuickUpdateId(event.target.value)}>
                         <option value="">Choose a pond</option>
-                        {data.ponds.map((pond) => (
+                        {visiblePonds.map((pond) => (
                           <option key={pond.id} value={pond.id}>Pond {pond.number} · {pond.site?.name || 'Main site'}</option>
                         ))}
                       </select>
                     </label>
 
                     <div className="quick-update-form-grid">
-                      <select value={pondLogForm.feedSize || '4mm'} onChange={(event) => setPondLogForm((current) => ({ ...current, feedSize: event.target.value }))}>
-                        <option value="1mm">1mm</option>
-                        <option value="1.5mm">1.5mm</option>
-                        <option value="2mm">2mm</option>
-                        <option value="2.5mm">2.5mm</option>
-                        <option value="3mm">3mm</option>
-                        <option value="3.5mm">3.5mm</option>
-                        <option value="4mm">4mm</option>
-                        <option value="4.5mm">4.5mm</option>
+                      <select
+                        value={pondLogForm.feedSize || (getAvailableFeedSizes()[0] || '')}
+                        onChange={(event) => setPondLogForm((current) => ({ ...current, feedSize: event.target.value }))}
+                        disabled={getAvailableFeedSizes().length === 0}
+                      >
+                        {getAvailableFeedSizes().length === 0 ? (
+                          <option value="">No feed in stock</option>
+                        ) : (
+                          getAvailableFeedSizes().map((size) => (
+                            <option key={size} value={size}>{size}</option>
+                          ))
+                        )}
                       </select>
 
                       <select value={pondLogForm.inventoryItemId || ''} onChange={(event) => setPondLogForm((current) => ({ ...current, inventoryItemId: event.target.value }))}>
                         <option value="">Feed stock item (optional)</option>
-                        {data.inventoryItems.filter((item) => String(item.category || '').toUpperCase().includes('FEED') || String(item.name || '').toLowerCase().includes('feed')).map((item) => (
+                        {data.inventoryItems.filter((item) => {
+                          const category = String(item.category || '').toUpperCase();
+                          const name = String(item.name || '').toLowerCase();
+                          return (category === 'FEED' || name.includes('feed')) && Number(item.currentStock || 0) > 0;
+                        }).map((item) => (
                           <option key={item.id} value={item.id}>{item.name}</option>
                         ))}
                       </select>
@@ -4011,13 +4217,11 @@ function App() {
                     <form className="worker-create-form" onSubmit={async (event) => {
                       event.preventDefault();
                       const pondId = targetHarvestAction.pondId || selectedPondId || '';
-                      const qty = Number((targetHarvestAction as any).quantity || 0);
                       if (!pondId || !targetHarvestAction.date) { setToastMessage('Choose a pond and date'); return; }
-                      if (!Number.isInteger(qty) || qty <= 0) { setToastMessage('Enter a positive whole number for harvest quantity'); return; }
                       if (!token) { setToastMessage('Not authorized'); return; }
                       try {
                         const timestamp = new Date(`${targetHarvestAction.date}T${targetHarvestAction.time || '09:00'}`);
-                        const body: any = { targetHarvestDate: timestamp.toISOString(), targetHarvestQuantity: qty };
+                        const body: any = { targetHarvestDate: timestamp.toISOString() };
                         const r = await fetch(`${apiBaseUrl}/ponds/${pondId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' }, body: JSON.stringify(body) });
                         if (r.ok) { setToastMessage('Target harvest set'); setAdminActionModal(null); await refreshDashboard(); } else { const txt = await r.text().catch(() => ''); let parsed; try { parsed = JSON.parse(txt || '{}'); } catch { parsed = { error: txt || r.statusText }; } setToastMessage(parsed.error || parsed.message || `Server error ${r.status}`); }
                       } catch (err) {
@@ -4028,7 +4232,7 @@ function App() {
                         <span>Available pond</span>
                         <select value={targetHarvestAction.pondId} onChange={(event) => setTargetHarvestAction({ ...targetHarvestAction, pondId: event.target.value })} required>
                           <option value="">Select a pond</option>
-                          {data.ponds.map((pond) => (
+                          {visiblePonds.map((pond) => (
                             <option key={pond.id} value={pond.id}>Pond {pond.number} · {pond.site?.name || 'Main site'}</option>
                           ))}
                         </select>
@@ -4041,10 +4245,6 @@ function App() {
                         <label className="worker-field">
                           <span>Time</span>
                           <input type="time" value={targetHarvestAction.time} onChange={(event) => setTargetHarvestAction({ ...targetHarvestAction, time: event.target.value })} required />
-                        </label>
-                        <label className="worker-field">
-                          <span>Harvest qty</span>
-                          <input type="number" min="1" step="1" value={(targetHarvestAction as any).quantity || ''} onChange={(event) => setTargetHarvestAction({ ...targetHarvestAction, quantity: event.target.value })} placeholder="Number of fish" />
                         </label>
                       </div>
                       <div className="modal-actions compact-actions">
@@ -4100,7 +4300,7 @@ function App() {
                         <span>Available pond</span>
                         <select value={harvestQuantityAction.pondId} onChange={(event) => setHarvestQuantityAction({ ...harvestQuantityAction, pondId: event.target.value })} required>
                           <option value="">Select a pond</option>
-                          {data.ponds.map((pond) => (
+                          {visiblePonds.map((pond) => (
                             <option key={pond.id} value={pond.id}>Pond {pond.number} · {pond.site?.name || 'Main site'}</option>
                           ))}
                         </select>
@@ -4142,7 +4342,7 @@ function App() {
                         <span>Available pond</span>
                         <select value={recommendFeedAction.pondId} onChange={(event) => setRecommendFeedAction({ ...recommendFeedAction, pondId: event.target.value })} required>
                           <option value="">Select a pond</option>
-                          {data.ponds.map((pond) => (
+                          {visiblePonds.map((pond) => (
                             <option key={pond.id} value={pond.id}>Pond {pond.number} · {pond.site?.name || 'Main site'}</option>
                           ))}
                         </select>
@@ -4150,21 +4350,14 @@ function App() {
                       <label className="worker-field full-width">
                         <span>Feed size</span>
                         <select value={recommendFeedAction.feedSize} onChange={(event) => setRecommendFeedAction({ ...recommendFeedAction, feedSize: event.target.value })}>
-                          <option value="1mm">1mm</option>
-                          <option value="1.5mm">1.5mm</option>
-                          <option value="2mm">2mm</option>
-                          <option value="2.5mm">2.5mm</option>
-                          <option value="3mm">3mm</option>
-                          <option value="3.5mm">3.5mm</option>
-                          <option value="4mm">4mm</option>
-                          <option value="4.5mm">4.5mm</option>
+                          {getAvailableFeedSizes().map((size) => <option key={size} value={size}>{size}</option>)}
                         </select>
                       </label>
                       <label className="worker-field full-width">
                         <span>Feed stock item</span>
                         <select value={recommendFeedAction.inventoryItemId} onChange={(event) => setRecommendFeedAction({ ...recommendFeedAction, inventoryItemId: event.target.value })}>
                           <option value="">Use default feed</option>
-                          {data.inventoryItems.filter((item) => item.category === 'FEED' || item.category?.toUpperCase() === 'FEED').map((item) => (
+                          {getAvailableFeedInventoryItems().map((item) => (
                             <option key={item.id} value={item.id}>{item.name}</option>
                           ))}
                         </select>
@@ -4194,7 +4387,7 @@ function App() {
                         <span>Available pond</span>
                         <select value={adminPondQuickUpdateId} onChange={(event) => setAdminPondQuickUpdateId(event.target.value)}>
                           <option value="">Choose a pond</option>
-                          {data.ponds.map((pond) => (
+                          {visiblePonds.map((pond) => (
                             <option key={pond.id} value={pond.id}>Pond {pond.number} · {pond.site?.name || 'Main site'}</option>
                           ))}
                         </select>
@@ -4217,7 +4410,7 @@ function App() {
                         <span>Available pond</span>
                         <select value={mortalityAction.pondId} onChange={(event) => setMortalityAction({ ...mortalityAction, pondId: event.target.value })} required>
                           <option value="">Select a pond</option>
-                          {data.ponds.map((pond) => (
+                          {visiblePonds.map((pond) => (
                             <option key={pond.id} value={pond.id}>Pond {pond.number} · {pond.site?.name || 'Main site'}</option>
                           ))}
                         </select>
@@ -4255,6 +4448,7 @@ function App() {
                     isOwner={isOwner}
                     form={pondLogForm}
                     inventoryItems={data.inventoryItems}
+                    lastSubmittedPondUpdate={lastSubmittedPondUpdate}
                     onFormChange={setPondLogForm}
                     onSubmit={handleWorkerPondLogEnhanced}
                     onRecordHarvest={(harvest: any) => { setLastCreatedHarvest({ id: harvest.id, pondId: harvest.pondId, numberHarvested: harvest.numberHarvested }); setToastMessage(`${harvest.numberHarvested} fish recorded — Undo`); }}
@@ -4617,6 +4811,16 @@ function App() {
                                     >
                                       Reset password
                                     </button>
+                                    <button
+                                      type="button"
+                                      className="danger-btn compact-btn"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        showDeleteConfirmation('worker', worker.id, worker.name || worker.email || 'worker');
+                                      }}
+                                    >
+                                      Delete worker
+                                    </button>
                                   </div>
                                 </>
                               ) : null}
@@ -4704,16 +4908,18 @@ function App() {
           </>
         ) : null}
 
-        {activeNav === 'inventory' && isOwner ? (
+        {activeNav === 'inventory' && canViewInventory ? (
           <section className="dashboard-grid wide-left">
             <Panel eyebrow="Inventory" title="Stock levels">
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
-                <button type="button" className="primary-btn" onClick={() => setShowInventoryForm((current) => !current)}>
-                  <Plus size={16} />{showInventoryForm ? 'Close' : 'Add stock item'}
-                </button>
-              </div>
+              {isOwner ? (
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+                  <button type="button" className="primary-btn" onClick={() => setShowInventoryForm((current) => !current)}>
+                    <Plus size={16} />{showInventoryForm ? 'Close' : 'Add stock item'}
+                  </button>
+                </div>
+              ) : null}
 
-              {showInventoryForm ? (
+              {showInventoryForm && isOwner ? (
                 <div className="modal-backdrop" onClick={() => setShowInventoryForm(false)}>
                   <div className="modal modal-md" onClick={(event) => event.stopPropagation()}>
                     <h3>Add stock item</h3>
@@ -4752,7 +4958,7 @@ function App() {
                 </div>
               ) : null}
 
-              {restockItemId ? (
+              {restockItemId && isOwner ? (
                 <div className="modal-backdrop" onClick={() => setRestockItemId(null)}>
                   <div className="modal modal-sm" onClick={(event) => event.stopPropagation()}>
                     <h3>Restock item</h3>
@@ -4783,10 +4989,12 @@ function App() {
                         key={item.id}
                         className={low ? `inventory-card danger ${inventoryContextId === item.id ? 'context-menu-open' : ''}` : `inventory-card ${inventoryContextId === item.id ? 'context-menu-open' : ''}`}
                         onContextMenu={(event) => {
+                          if (!isOwner) return;
                           event.preventDefault();
                           setInventoryContextId(item.id);
                         }}
                         onPointerDown={() => {
+                          if (!isOwner) return;
                           clearInventoryLongPress();
                           inventoryLongPressTimerRef.current = window.setTimeout(() => {
                             setInventoryContextId(item.id);
@@ -4795,7 +5003,7 @@ function App() {
                         onPointerUp={clearInventoryLongPress}
                         onPointerLeave={clearInventoryLongPress}
                       >
-                        {inventoryContextId === item.id ? (
+                        {isOwner && inventoryContextId === item.id ? (
                           <div className="inventory-context-action">
                             <button
                               type="button"
@@ -4814,14 +5022,16 @@ function App() {
                             <strong>{item.name}</strong>
                             <span>{item.category} · {item.unit}</span>
                           </div>
-                          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                            <button type="button" className="primary-btn compact-btn" onClick={(event) => { event.stopPropagation(); setRestockItemId(item.id); setRestockQuantity(''); }} aria-label="Restock item">+</button>
-                          </div>
+                          {isOwner ? (
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                              <button type="button" className="primary-btn compact-btn" onClick={(event) => { event.stopPropagation(); setRestockItemId(item.id); setRestockQuantity(''); }} aria-label="Restock item">+</button>
+                            </div>
+                          ) : null}
                         </div>
                         <div className="inventory-metrics">
                           <div>
                             <span>On hand</span>
-                            <strong>{item.currentStock ?? 0}</strong>
+                            <strong>{formatTwoDecimalPlaces(Number(item.currentStock ?? 0))}</strong>
                           </div>
                           <div>
                             <span>Minimum</span>
@@ -4838,7 +5048,7 @@ function App() {
                         </div>
                         <div className="inventory-transaction">
                           <small>Last movement</small>
-                          <span>{latestTransaction ? `${latestTransaction.change > 0 ? '+' : ''}${latestTransaction.change} · ${latestTransaction.reason || 'Adjustment'} · ${new Date(latestTransaction.createdAt).toLocaleDateString()}` : 'No transactions yet'}</span>
+                          <span>{latestTransaction ? `${latestTransaction.change > 0 ? '+' : ''}${latestTransaction.change} · ${latestTransaction.pond ? `Feed used at Pond ${latestTransaction.pond.number}` : (latestTransaction.reason || 'Adjustment')} · ${new Date(latestTransaction.createdAt).toLocaleDateString()}` : 'No transactions yet'}</span>
                         </div>
                       </div>
                     );
@@ -4847,7 +5057,7 @@ function App() {
               </div>
             </Panel>
             <Panel eyebrow="Alerting" title="Low stock monitor">
-              <div className="analysis-card"><strong>{overview.lowStock} low-stock item(s)</strong><p>Inventory costs remain in finance. Workers cannot see inventory cost data.</p></div>
+              <div className="analysis-card"><strong>{overview.lowStock} low-stock item(s)</strong><p>{isOwner ? 'Inventory costs remain in finance. Workers cannot see inventory cost data.' : 'Review feed stock before pond updates to avoid shortages.'}</p></div>
             </Panel>
           </section>
         ) : null}
@@ -4880,7 +5090,17 @@ function App() {
                </div>
              </div>
 
-             <div className="floating-chat-list" ref={chatListRef}>
+             <div
+               className="floating-chat-list"
+               ref={chatListRef}
+               onPointerDown={(event) => {
+                 const target = event.target as HTMLElement;
+                 if (!target.closest('.chat-swipe-action') && revealedChatId) {
+                   setRevealedChatId(null);
+                   setChatRevealDirection(null);
+                 }
+               }}
+             >
                {sortedChatMessages.length === 0 ? (
                  <p className="empty-copy">No messages yet. Start the conversation.</p>
                ) : (
@@ -4901,7 +5121,7 @@ function App() {
                          {shouldShowRecentDivider ? <div className="chat-thread-marker">Recent Messages</div> : null}
                          <div className={isRevealed ? `chat-swipe-shell ${actionClass}` : 'chat-swipe-shell'}>
                            <div className="chat-swipe-action reply-action">
-                             <button type="button" className="secondary-btn compact-btn" onClick={() => setChatReplyTargetId(message.id)}>Reply</button>
+                             <button type="button" className="secondary-btn compact-btn" onClick={() => { setChatReplyTargetId(message.id); setRevealedChatId(null); setChatRevealDirection(null); }}>Reply</button>
                            </div>
                            <div
                              className={isMine ? 'chat-message-row mine' : 'chat-message-row'}
@@ -4911,19 +5131,20 @@ function App() {
                              onPointerLeave={handleChatSwipeEnd}
                              style={{ touchAction: 'pan-y' }}
                            >
-                             <div className="chat-message-header">
-                               <strong>{message.senderName}</strong>
-                               <span>{message.senderRole === 'OWNER' ? 'Admin' : 'Worker'}</span>
-                             </div>
-                             {message.text ? <p>{message.text.split(/(@[A-Za-z0-9_.-]+)/g).map((part, textIndex) => part.startsWith('@') ? <mark key={`${message.id}-${textIndex}`} className="chat-mention-highlight">{part}</mark> : <span key={`${message.id}-${textIndex}`}>{part}</span>)}</p> : null}
-                             {message.imageUrl ? (
-                               <div className="chat-message-image-wrap">
-                                 <img src={message.imageUrl} alt="Shared chat attachment" />
+                             <div className="chat-message-bubble">
+                               <div className="chat-message-header">
+                                 <strong>{message.senderName}</strong>
+                                 <span>{message.senderRole === 'OWNER' ? 'Admin' : 'Worker'}</span>
                                </div>
-                             ) : null}
-                             <div className="chat-message-meta">
-                               <small>{new Date(message.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })} · {new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</small>
-                               <small className="chat-swipe-hint">Swipe</small>
+                               {message.text.trim() ? <p>{message.text.split(/(@[A-Za-z0-9_.-]+)/g).map((part, textIndex) => part.startsWith('@') ? <mark key={`${message.id}-${textIndex}`} className="chat-mention-highlight">{part}</mark> : <span key={`${message.id}-${textIndex}`}>{part}</span>)}</p> : null}
+                               {message.imageUrl ? (
+                                 <div className="chat-message-image-wrap">
+                                   <img src={message.imageUrl} alt="Shared chat attachment" />
+                                 </div>
+                               ) : null}
+                               <div className="chat-message-meta">
+                                 <small>{new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</small>
+                               </div>
                              </div>
                            </div>
                            {canDelete ? (
@@ -5026,6 +5247,7 @@ function PondSummaryPanel({
   isOwner,
   form,
   inventoryItems,
+  lastSubmittedPondUpdate,
   onFormChange,
   onSubmit,
   onRecordHarvest,
@@ -5064,6 +5286,7 @@ function PondSummaryPanel({
     harvestDestination: string;
   };
   inventoryItems: any[];
+  lastSubmittedPondUpdate: Record<string, { id: string; title: string; detail: string; date: string; worker: string; type: string }>;
   onFormChange: (form: any) => void;
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
   onRecordHarvest?: (harvest: any) => void;
@@ -5088,10 +5311,94 @@ function PondSummaryPanel({
   const targetAvg = pond.targetHarvestKg ? (pond.targetHarvestKg * 1000).toFixed(0) + ' g' : 'Not planned';
   const daysRemaining = summary.harvest ? summary.harvest.daysRemaining : null;
   const growthProgress = summary.harvest ? summary.harvest.progressPercent : null;
+  const availableFeedSizes = [...new Set(
+    inventoryItems
+      .filter((item) => {
+        const category = String(item.category || '').toUpperCase();
+        const name = String(item.name || '').toLowerCase();
+        return (category === 'FEED' || name.includes('feed')) && Number(item.currentStock || 0) > 0;
+      })
+      .map((item) => {
+        const direct = String(item.feedSize || item.size || '').trim();
+        if (direct) return direct;
+        const match = String(item.name || '').match(/(\d+(?:\.\d+)?)mm/i);
+        return match ? `${match[1]}mm` : null;
+      })
+      .filter((value): value is string => Boolean(value))
+  )].sort((left, right) => {
+    const orderedSizes = ['1mm', '1.5mm', '2mm', '2.5mm', '3mm', '3.5mm', '4mm', '4.5mm'];
+    const leftIndex = orderedSizes.indexOf(left);
+    const rightIndex = orderedSizes.indexOf(right);
+    return (leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex) - (rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex);
+  });
   const currentFeedSize = summary.latestFeedSize || summary.recommendedFeedSize || '4mm';
-  const recommendedFeedSize = summary.recommendedFeedSize || getRecommendedFeedSize(typeof currentAvg === 'number' ? currentAvg : Number(pond.initialAvgWeightG ?? 0));
+  const recommendedFeedSize = pond.recommendedFeedSize || summary.recommendedFeedSize || getRecommendedFeedSize(typeof currentAvg === 'number' ? currentAvg : Number(pond.initialAvgWeightG ?? 0));
   const feedNeedsChange = currentFeedSize !== recommendedFeedSize;
   const harvestDateValue = pond.targetHarvestDate ? new Date(pond.targetHarvestDate).toISOString().slice(0,10) : (summary.harvest ? new Date(summary.harvest.expectedHarvestDate).toISOString().slice(0,10) : '');
+  const recentPondUpdates = useMemo(() => {
+    const entries: Array<{ id: string; title: string; detail: string; date: string; worker: string; type: string }> = [];
+    const fiveDaysAgo = Date.now() - (5 * 24 * 60 * 60 * 1000);
+
+    const localEntry = lastSubmittedPondUpdate[pond.id];
+    if (localEntry) {
+      const localDateMs = new Date(localEntry.date).getTime();
+      if (!Number.isNaN(localDateMs) && localDateMs >= fiveDaysAgo) {
+        entries.push(localEntry);
+      }
+    }
+
+    const addEntry = (source: any, type: string, title: string, dateValue?: string | Date | null, workerName?: string | null, extraDetail?: string) => {
+      if (!source) return;
+      const date = source.date || source.recordedAt || source.observedAt || source.measuredAt || dateValue;
+      const worker = workerName || source.worker?.name || source.worker?.email || 'Worker';
+      if (!date) return;
+      const dateMs = new Date(date).getTime();
+      if (Number.isNaN(dateMs) || dateMs < fiveDaysAgo) return;
+      entries.push({
+        id: `${type}-${source.id || Math.random().toString(16).slice(2)}`,
+        title,
+        detail: extraDetail || `by ${worker}`,
+        date: new Date(date).toISOString(),
+        worker,
+        type,
+      });
+    };
+
+    (pond.feedLogs || []).forEach((log: any) => addEntry(
+      log,
+      'Feed',
+      `${log.quantityKg ?? 0} kg fed`,
+      log.date,
+      log.worker?.name || log.worker?.email,
+      `${log.feedSize || 'Feed'} size • ${log.feedType || 'pellet'} • ${log.quantityKg ?? 0} kg`
+    ));
+    (pond.mortalityLogs || []).forEach((log: any) => addEntry(
+      log,
+      'Mortality',
+      `${log.numberDead ?? 0} fish lost`,
+      log.observedAt,
+      log.worker?.name || log.worker?.email,
+      `${log.possibleCause || 'Unspecified cause'} • ${log.numberDead ?? 0} fish`
+    ));
+    (pond.harvestLogs || []).forEach((log: any) => addEntry(
+      log,
+      'Harvest',
+      `${log.numberHarvested ?? 0} fish harvested`,
+      log.recordedAt,
+      log.worker?.name || log.worker?.email,
+      `${log.method || 'Manual'} harvest • ${log.numberHarvested ?? 0} fish`
+    ));
+    (pond.growthMeasurements || []).forEach((log: any) => addEntry(
+      log,
+      'Growth',
+      `Avg wt ${log.avgWeightGrams ?? 0} g`,
+      log.measuredAt,
+      log.worker?.name || log.worker?.email,
+      `Average weight ${log.avgWeightGrams ?? 0} g • ${log.growthComment || 'Growth check'}`
+    ));
+
+    return entries.sort((left, right) => new Date(right.date).getTime() - new Date(left.date).getTime()).slice(0, 5);
+  }, [lastSubmittedPondUpdate, pond]);
 
   const [targetDate, setTargetDate] = useState<string>(harvestDateValue);
   const [editingHarvestId, setEditingHarvestId] = useState<string | null>(null);
@@ -5159,25 +5466,54 @@ function PondSummaryPanel({
           </div>
         </div>
 
+        {isOwner && recentPondUpdates.length > 0 ? (
+          <div className="pond-detail-card">
+            <div className="detail-card-header">
+              <div>
+                <span className="eyebrow">Recent worker activity</span>
+                <h3>Pond updates</h3>
+              </div>
+            </div>
+            <div className="recent-update-list">
+              {recentPondUpdates.map((update) => (
+                <div key={update.id} className="recent-update-item">
+                  <div className="recent-update-copy">
+                    <strong>{update.title}</strong>
+                    <span>{update.detail}</span>
+                    <small>Worker: {update.worker}</small>
+                  </div>
+                  <small>{new Date(update.date).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</small>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
       </div>
 
         {!isOwner ? (
           <form className="worker-log-form" onSubmit={onSubmit}>
-          <select value={form.feedSize || currentFeedSize} onChange={(event) => onFormChange({ ...form, feedSize: event.target.value })} disabled={Boolean(summary.recommendedFeedSize || summary.latestFeedSize)}>
-            <option value="1mm">1mm</option>
-            <option value="1.5mm">1.5mm</option>
-            <option value="2mm">2mm</option>
-            <option value="2.5mm">2.5mm</option>
-            <option value="3mm">3mm</option>
-            <option value="3.5mm">3.5mm</option>
-            <option value="4mm">4mm</option>
-            <option value="4.5mm">4.5mm</option>
+          <select
+            value={form.feedSize || (availableFeedSizes[0] || '')}
+            onChange={(event) => onFormChange({ ...form, feedSize: event.target.value })}
+            disabled={availableFeedSizes.length === 0}
+          >
+            {availableFeedSizes.length === 0 ? (
+              <option value="">No feed in stock</option>
+            ) : (
+              availableFeedSizes.map((size) => (
+                <option key={size} value={size}>{size}</option>
+              ))
+            )}
           </select>
           <select value={form.inventoryItemId || ''} onChange={(event) => onFormChange({ ...form, inventoryItemId: event.target.value })}>
             <option value="">Feed stock item (optional)</option>
-            {inventoryItems.filter((item) => String(item.category || '').toUpperCase().includes('FEED') || String(item.name || '').toLowerCase().includes('feed')).map((item) => (
-              <option key={item.id} value={item.id}>{item.name} ({item.currentStock ?? 0} {item.unit || 'kg'})</option>
+            {inventoryItems.filter((item) => {
+              const category = String(item.category || '').toUpperCase();
+              const name = String(item.name || '').toLowerCase();
+              return (category === 'FEED' || name.includes('feed')) && Number(item.currentStock || 0) > 0;
+            }).map((item) => (
+              <option key={item.id} value={item.id}>{item.name} ({formatTwoDecimalPlaces(Number(item.currentStock ?? 0))} {item.unit || 'kg'})</option>
             ))}
           </select>
           <input type="number" min="0" step="10" placeholder="Feed grams" value={form.feedGrams} onChange={(event) => onFormChange({ ...form, feedGrams: event.target.value, feedKg: event.target.value ? (Number(event.target.value) / 1000).toFixed(3) : '' })} />
@@ -5306,6 +5642,3 @@ function RecordList({ records, emptyTitle, render }: { records: any[]; emptyTitl
 }
 
 export default App;
-
-
-

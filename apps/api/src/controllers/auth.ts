@@ -472,7 +472,28 @@ export async function deleteWorker(req: Request, res: Response) {
     return res.status(404).json({ error: 'Worker not found' });
   }
 
-  await prisma.user.delete({ where: { id: workerId } }).catch(() => null);
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.pond.updateMany({ where: { assignedUserId: workerId }, data: { assignedUserId: null } });
+      await tx.feedingLog.updateMany({ where: { workerId }, data: { workerId: null } });
+      await tx.waterQualityLog.updateMany({ where: { workerId }, data: { workerId: null } });
+      await tx.mortalityLog.updateMany({ where: { workerId }, data: { workerId: null } });
+      await tx.harvestLog.updateMany({ where: { workerId }, data: { workerId: null } });
+      await tx.growthMeasurement.updateMany({ where: { workerId }, data: { workerId: null } });
+      await tx.attachment.updateMany({ where: { uploadedById: workerId }, data: { uploadedById: null } });
+      await tx.notification.updateMany({ where: { userId: workerId }, data: { userId: null } });
+      await tx.auditLog.updateMany({ where: { userId: workerId }, data: { userId: null } });
+      await tx.registrationCode.updateMany({ where: { usedById: workerId }, data: { usedById: null } });
+      await tx.session.deleteMany({ where: { userId: workerId } });
+      await tx.taskComment.deleteMany({ where: { userId: workerId } });
+      await tx.taskAssignment.deleteMany({ where: { userId: workerId } });
+      await tx.chatMessage.deleteMany({ where: { senderId: workerId } });
+      await tx.financeRecord.deleteMany({ where: { recordedById: workerId } });
+      await tx.user.delete({ where: { id: workerId } });
+    });
+  } catch (error) {
+    console.error('Failed to delete worker', error);
+    return res.status(409).json({ error: 'Worker cannot be deleted while dependent records prevent removal.' });
+  }
   return res.json({ success: true, deleted: { id: worker.id, email: worker.email } });
 }
-

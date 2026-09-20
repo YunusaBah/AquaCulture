@@ -8,6 +8,11 @@
   "scripts": {
     "dev": "concurrently -n api,web -c cyan,green \"npm run dev -w @aquaculture/api\" \"npm run dev -w @aquaculture/web\"",
     "build": "npm run build -w @aquaculture/api && npm run build -w @aquaculture/web",
+    "mobile:build": "npm run build -w @aquaculture/web",
+    "mobile:sync": "npm run mobile:build && npx cap sync",
+    "mobile:android": "npm run mobile:sync && npx cap open android",
+    "mobile:ios": "npm run mobile:sync && npx cap open ios",
+    "mobile:copy": "npm run mobile:build && npx cap copy",
     "lint": "npm run lint -w @aquaculture/api && npm run lint -w @aquaculture/web",
     "format": "prettier --write .",
     "db:generate": "npm run db:generate -w @aquaculture/api",
@@ -16,8 +21,13 @@
     "db:seed": "npm run db:seed -w @aquaculture/api"
   },
   "devDependencies": {
+    "@capacitor/cli": "^7.6.9",
     "concurrently": "^9.1.2",
-    "prettier": "^3.4.1",
-    "prisma": "^8.0.0-rc.13"
+    "prettier": "^3.4.1"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.6.9",
+    "@capacitor/core": "^7.6.9",
+    "@capacitor/ios": "^7.6.9"
   }
 }
