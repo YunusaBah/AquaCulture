@@ -9,6 +9,7 @@ export interface AuthRequest extends Request {
   userRole?: 'OWNER' | 'WORKER';
   user?: {
     id: string;
+    reportId?: string;
     email: string;
     name: string | null;
     role: {
@@ -28,6 +29,7 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
       req.userRole = fallbackUser.role;
       req.user = {
         id: fallbackUser.id,
+        reportId: undefined,
         email: fallbackUser.email,
         name: fallbackUser.name,
         role: { name: fallbackUser.role },
@@ -36,7 +38,7 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
     }
     const user = await prisma.user.findUnique({
       where: { id: payload.userId },
-      select: { id: true, email: true, name: true, role: { select: { name: true } } },
+      select: { id: true, reportId: true, email: true, name: true, role: { select: { name: true } } },
     });
     if (!user) return res.status(401).json({ error: 'Invalid token' });
     const normalizedRole = normalizeRole(user.role.name);

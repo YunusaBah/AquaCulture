@@ -8,7 +8,7 @@ export async function getFarms(req: AuthRequest, res: Response) {
     include: {
       owner: { select: { id: true, name: true, email: true } },
       sites: { include: { ponds: true } },
-      members: { select: { id: true, name: true, email: true, role: { select: { name: true } } } },
+      members: { select: { id: true, reportId: true, name: true, email: true, role: { select: { name: true } } } },
     },
   });
 

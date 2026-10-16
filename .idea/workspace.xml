@@ -9,20 +9,9 @@
   <component name="ChangeListManager">
     <list default="true" id="a134e491-888f-4bed-a802-281d0a1d101d" name="Changes" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/apps/api/prisma/schema.prisma" beforeDir="false" afterPath="$PROJECT_DIR$/apps/api/prisma/schema.prisma" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/apps/api/src/config/permissions.ts" beforeDir="false" afterPath="$PROJECT_DIR$/apps/api/src/config/permissions.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/apps/api/src/controllers/auth.ts" beforeDir="false" afterPath="$PROJECT_DIR$/apps/api/src/controllers/auth.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/apps/api/src/controllers/chat.ts" beforeDir="false" afterPath="$PROJECT_DIR$/apps/api/src/controllers/chat.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/apps/api/src/controllers/feeding.ts" beforeDir="false" afterPath="$PROJECT_DIR$/apps/api/src/controllers/feeding.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/apps/api/src/controllers/harvest.ts" beforeDir="false" afterPath="$PROJECT_DIR$/apps/api/src/controllers/harvest.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/apps/api/src/controllers/inventory.ts" beforeDir="false" afterPath="$PROJECT_DIR$/apps/api/src/controllers/inventory.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/apps/api/src/controllers/ponds.ts" beforeDir="false" afterPath="$PROJECT_DIR$/apps/api/src/controllers/ponds.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/apps/api/src/server.ts" beforeDir="false" afterPath="$PROJECT_DIR$/apps/api/src/server.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/apps/web/src/App.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/apps/web/src/App.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/apps/web/src/lib/permissions.ts" beforeDir="false" afterPath="$PROJECT_DIR$/apps/web/src/lib/permissions.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/apps/web/src/styles.css" beforeDir="false" afterPath="$PROJECT_DIR$/apps/web/src/styles.css" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/package-lock.json" beforeDir="false" afterPath="$PROJECT_DIR$/package-lock.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/package.json" beforeDir="false" afterPath="$PROJECT_DIR$/package.json" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -37,6 +26,18 @@
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;YunusaBah&quot;
+  }
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;https://github.com/YunusaBah/AquaCulture.git&quot;,
+    &quot;accountId&quot;: &quot;20fede93-becb-40f8-9f64-1f555b45459f&quot;
+  }
+}</component>
   <component name="McpProjectServerCommands">
     <commands />
     <urls />
@@ -102,7 +103,7 @@
     &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
     &quot;npm.install.executor&quot;: &quot;Run&quot;,
     &quot;run.code.analysis.last.selected.profile&quot;: &quot;pProject Default&quot;,
-    &quot;settings.editor.selected.configurable&quot;: &quot;ml.llm.AcpAgentsConfigurable&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;preferences.pluginManager&quot;,
     &quot;to.speed.mode.migration.done&quot;: &quot;true&quot;,
     &quot;ts.external.directory.path&quot;: &quot;C:\\Users\\kebba\\AppData\\Local\\Programs\\IntelliJ IDEA\\plugins\\javascript-plugin\\jsLanguageServicesImpl\\external&quot;,
     &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
@@ -181,7 +182,21 @@
       <workItem from="1789725870916" duration="2356000" />
       <workItem from="1789761046081" duration="7558000" />
       <workItem from="1789822337592" duration="3323000" />
-      <workItem from="1789864493855" duration="11815000" />
+      <workItem from="1789864493855" duration="12071000" />
+      <workItem from="1789943549404" duration="1441000" />
+      <workItem from="1790154885027" duration="1351000" />
+      <workItem from="1790258884865" duration="13415000" />
+      <workItem from="1790370751344" duration="1367000" />
+      <workItem from="1790372309176" duration="1566000" />
+      <workItem from="1790377822173" duration="617000" />
+      <workItem from="1790467418246" duration="643000" />
+      <workItem from="1790558208850" duration="975000" />
+      <workItem from="1790768860144" duration="1029000" />
+      <workItem from="1790780415647" duration="904000" />
+      <workItem from="1790867122353" duration="2008000" />
+      <workItem from="1790951224964" duration="779000" />
+      <workItem from="1790958060367" duration="385000" />
+      <workItem from="1791025725569" duration="1669000" />
     </task>
     <servers />
   </component>
@@ -194,6 +209,17 @@
         <option value="$PROJECT_DIR$/apps/api/prisma/prisma.config.js" />
         <option value="$PROJECT_DIR$/apps/api/prisma/seed.js" />
       </list>
+    </option>
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
     </option>
   </component>
   <component name="VcsManagerConfiguration">

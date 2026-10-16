@@ -38,6 +38,17 @@ AquaCulture is a mobile-first aquaculture management platform for fish farms, fi
 - `npm run db:push` — sync schema to the database
 - `npm run db:seed` — seed demo data
 
+## Free-tier deployment
+
+The repository includes a Render Blueprint for the API (`render.yaml`) and Vercel settings for the Vite frontend (`vercel.json`).
+
+1. Create a PostgreSQL project on Neon and copy its connection string. Use the direct connection URL for reliable Prisma migrations.
+2. In Render, create a Blueprint from this repository and provide `DATABASE_URL` when prompted. The Blueprint generates `JWT_SECRET`, builds the API, runs pending Prisma migrations on startup, and exposes `/api/health`.
+3. In Vercel, import the repository with the project root as the Root Directory. Set `VITE_API_URL` to the deployed Render URL with `/api` appended, for example `https://aquaculture-api.onrender.com/api`.
+4. Redeploy the Vercel project after setting `VITE_API_URL`.
+
+Free plans have usage limits and can change; they are not guaranteed to remain free forever. Render's free service may sleep when idle, and files uploaded to its temporary filesystem (including pond photos) are not durable across restarts or deploys. Use persistent object storage before relying on uploaded files in production.
+
 ## Access roles
 
 - Owner role for financial and operational oversight

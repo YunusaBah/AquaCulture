@@ -1,10 +1,12 @@
 import { randomUUID } from 'crypto';
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { AuthRequest } from '../middleware/auth';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { JWT_SECRET } from '../config';
 import { addRuntimeUser, getFallbackUserByCredentials, listRuntimeUsers, runtimeUsers } from '../lib/devUsers';
+import { nextReportReference } from '../lib/financeTransactionId';
 
 const DEFAULT_ADMIN_CODE = process.env.SEED_OWNER_CODE || process.env.SEED_ADMIN_CODE || 'ADMIN2024';
 const LEGACY_ADMIN_CODES = new Set([DEFAULT_ADMIN_CODE, 'OWNER2024', 'ADMIN2024']);
@@ -16,6 +18,19 @@ function isValidOwnerLoginCode(code?: string) {
 
 function hasStrongPassword(password: string) {
   return /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/.test(String(password || '').trim());
+}
+
+export function getCurrentUser(req: AuthRequest, res: Response) {
+  if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
+  return res.json({
+    user: {
+      id: req.user.id,
+      reportId: req.user.reportId,
+      email: req.user.email,
+      name: req.user.name,
+      role: req.userRole,
+    },
+  });
 }
 
 const DEV_SEED_USERS = [
@@ -69,6 +84,7 @@ async function ensureDevelopmentUsers() {
         const hashed = await bcrypt.hash(userSeed.password, 10);
         await prisma.user.create({
           data: {
+            reportId: await nextReportReference(prisma),
             email: userSeed.email,
             name: userSeed.name,
             password: hashed,
@@ -165,6 +181,7 @@ export async function register(req: Request, res: Response) {
     const loginCode = normalizedCode;
     const user = await prisma.user.create({
       data: {
+        reportId: await nextReportReference(prisma),
         email: normalizedEmail,
         name: normalizedName,
         password: hashedPassword,
@@ -183,6 +200,7 @@ export async function register(req: Request, res: Response) {
     return res.status(201).json({
       user: {
         id: user.id,
+        reportId: user.reportId,
         email: user.email,
         name: user.name,
         role: user.role.name,
@@ -246,7 +264,7 @@ export async function login(req: Request, res: Response) {
           }
 
           const token = jwt.sign({ userId: seeded.id }, JWT_SECRET, { expiresIn: '7d' });
-          return res.json({ user: { id: seeded.id, email: seeded.email, name: seeded.name, role: seeded.role.name }, token });
+          return res.json({ user: { id: seeded.id, reportId: seeded.reportId, email: seeded.email, name: seeded.name, role: seeded.role.name }, token });
         }
       } catch (error) {
         console.warn('Database unavailable for fallback user lookup', error);
@@ -275,7 +293,7 @@ export async function login(req: Request, res: Response) {
     }
 
     const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
-    return res.json({ user: { id: user.id, email: user.email, name: user.name, role: user.role.name }, token });
+    return res.json({ user: { id: user.id, reportId: user.reportId, email: user.email, name: user.name, role: user.role.name }, token });
   } catch (error) {
     console.error('Login failed', error);
     return res.status(401).json({ error: 'Invalid credentials' });
@@ -322,6 +340,7 @@ export async function createWorker(req: Request, res: Response) {
 
     const worker = await prisma.user.create({
       data: {
+        reportId: await nextReportReference(prisma),
         email: normalizedEmail,
         name: normalizedName,
         password: hashedPassword,
@@ -334,6 +353,7 @@ export async function createWorker(req: Request, res: Response) {
     res.status(201).json({
       user: {
         id: worker.id,
+        reportId: worker.reportId,
         email: worker.email,
         name: worker.name,
         role: worker.role.name,
@@ -378,6 +398,7 @@ export async function listWorkers(req: Request, res: Response) {
     workers: [
       ...workers.map((worker) => ({
         id: worker.id,
+        reportId: worker.reportId,
         email: worker.email,
         name: worker.name,
         role: worker.role.name,

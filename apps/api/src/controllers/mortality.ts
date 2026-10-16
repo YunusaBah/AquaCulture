@@ -29,12 +29,11 @@ export async function getMortality(req: AuthRequest, res: Response) {
 }
 
 export async function createMortality(req: AuthRequest, res: Response) {
-  const { pondId, numberDead, avgSizeGrams, possibleCause, observedAt } = req.body as {
+  const { pondId, numberDead, avgSizeGrams, possibleCause } = req.body as {
     pondId?: string;
     numberDead?: number;
     avgSizeGrams?: number;
     possibleCause?: string;
-    observedAt?: string;
   };
 
   if (!pondId || !numberDead) {
@@ -68,7 +67,6 @@ export async function createMortality(req: AuthRequest, res: Response) {
           numberDead,
           avgSizeGrams: avgSizeGrams ?? null,
           possibleCause: possibleCause || 'Unspecified',
-          observedAt: observedAt ? new Date(observedAt) : new Date(),
         },
         include: {
           pond: true,

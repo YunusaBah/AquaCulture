@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { AuthRequest } from '../middleware/auth';
+import { nextReportReference } from '../lib/financeTransactionId';
 
 function financeSummary(records: Array<{ type: string; amount: number; pondId: string | null }>) {
   const salesRecords = records.filter((record) => record.type === 'SALES');
@@ -65,7 +66,7 @@ export async function getFinanceOverview(req: AuthRequest, res: Response) {
 }
 
 export async function createFinanceRecord(req: AuthRequest, res: Response) {
-  const { type, category, description, quantity, unit, unitPrice, amount, pondId, recordedAt } = req.body as any;
+  const { type, category, description, quantity, unit, unitPrice, amount, pondId } = req.body as any;
 
   if (!type || !category) {
     return res.status(400).json({ error: 'type and category are required' });
@@ -104,8 +105,9 @@ export async function createFinanceRecord(req: AuthRequest, res: Response) {
     return res.status(400).json({ error: 'amount must be non-negative' });
   }
 
-  const record = await prisma.financeRecord.create({
+  const record = await prisma.$transaction(async (tx) => tx.financeRecord.create({
     data: {
+      transactionId: await nextReportReference(tx),
       type: financeType as any,
       category,
       description: description || undefined,
@@ -114,14 +116,13 @@ export async function createFinanceRecord(req: AuthRequest, res: Response) {
       unitPrice: uNum ?? null,
       amount: resolvedAmount,
       pondId: pondId || null,
-      recordedAt: recordedAt ? new Date(recordedAt) : new Date(),
       recordedById: req.userId!,
     },
     include: {
       pond: { select: { id: true, number: true } },
       recordedBy: { select: { id: true, name: true, email: true } },
     },
-  });
+  }));
 
   res.status(201).json({ record });
 }

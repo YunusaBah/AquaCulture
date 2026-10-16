@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { AuthRequest } from '../middleware/auth';
 import { createNotificationForUser } from './notifications';
+import { nextReportReference } from '../lib/financeTransactionId';
 
 function asNumber(value: unknown) {
   const parsed = Number(value);
@@ -18,10 +19,11 @@ async function applyQueuedSyncItem(
     case 'pond_create': {
       const siteName = String(payload.siteName || 'Primary Farm Site').trim();
       const species = String(payload.species || 'CATFISH');
-      const number = asNumber(payload.number);
-      const capacity = asNumber(payload.capacity);
-      if (!number || !capacity) {
-        throw new Error('pond_create payload requires number and capacity');
+      const requestedNumber = asNumber(payload.number);
+      const capacity = asNumber(payload.capacity) ?? 5000;
+      const initialPopulation = asNumber(payload.initialPopulation);
+      if (!initialPopulation) {
+        throw new Error('pond_create payload requires initialPopulation');
       }
 
       let site = payload.siteId ? await prisma.farmSite.findUnique({ where: { id: String(payload.siteId) } }) : null;
@@ -38,23 +40,29 @@ async function applyQueuedSyncItem(
       }
 
       const assignedUserId = typeof payload.assignedUserId === 'string' && payload.assignedUserId ? payload.assignedUserId : null;
-      return prisma.pond.create({
-        data: {
-          siteId: site.id,
-          number,
-          species: species as any,
-          capacity,
-          current_volume: asNumber(payload.currentVolume) ?? null,
-          initial_population: asNumber(payload.initialPopulation) ?? null,
-          current_population: asNumber(payload.initialPopulation) ?? null,
-          stockedAt: payload.stockedAt ? new Date(payload.stockedAt) : null,
-          initialAvgWeightG: asNumber(payload.initialAvgWeightG) ?? null,
-          targetHarvestKg: asNumber(payload.targetHarvestKg) ?? null,
-          expectedGrowthGDay: asNumber(payload.expectedGrowthGDay) ?? null,
-          assignedUserId: assignedUserId || null,
-          status: (payload.status as any) || 'ACTIVE',
-          createdAt: payload.createdAt ? new Date(payload.createdAt) : undefined,
-        },
+      return prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(74152861)`;
+        const highestNumberedPond = await tx.pond.findFirst({ orderBy: { number: 'desc' }, select: { number: true } });
+        const number = Math.max(requestedNumber || 0, (highestNumberedPond?.number ?? 0) + 1);
+        return tx.pond.create({
+          data: {
+            siteId: site.id,
+            number,
+            species: species as any,
+            capacity,
+            current_volume: asNumber(payload.currentVolume) ?? null,
+            initial_population: initialPopulation,
+            current_population: initialPopulation,
+            stockedAt: new Date(),
+            initialAvgWeightG: asNumber(payload.initialAvgWeightG) ?? null,
+            targetHarvestKg: asNumber(payload.targetHarvestKg) ?? null,
+            targetHarvestDate: payload.targetHarvestDate ? new Date(String(payload.targetHarvestDate)) : null,
+            recommendedFeedSize: payload.recommendedFeedSize ? String(payload.recommendedFeedSize) : null,
+            expectedGrowthGDay: asNumber(payload.expectedGrowthGDay) ?? null,
+            assignedUserId: assignedUserId || null,
+            status: (payload.status as any) || 'ACTIVE',
+          },
+        });
       });
     }
 
@@ -67,8 +75,9 @@ async function applyQueuedSyncItem(
         throw new Error('task_create payload requires title');
       }
 
-      const task = await prisma.task.create({
+      const task = await prisma.$transaction(async (tx) => tx.task.create({
         data: {
+          reportId: await nextReportReference(tx),
           title,
           description,
           creatorId: userId,
@@ -79,7 +88,7 @@ async function applyQueuedSyncItem(
             create: assigneeIds.map((assigneeUserId) => ({ userId: assigneeUserId })),
           },
         },
-      });
+      }));
 
       await Promise.all(
         assigneeIds.map((assigneeUserId) =>
@@ -103,8 +112,9 @@ async function applyQueuedSyncItem(
         BUDGET: 'FIXED_COST',
       };
       const type = financeTypeMap[normalizedType] || normalizedType;
-      return prisma.financeRecord.create({
+      return prisma.$transaction(async (tx) => tx.financeRecord.create({
         data: {
+          transactionId: await nextReportReference(tx),
           type: type as any,
           category: String(payload.category || 'General'),
           description: payload.description ? String(payload.description) : null,
@@ -114,9 +124,8 @@ async function applyQueuedSyncItem(
           amount: asNumber(payload.amount) ?? 0,
           pondId: payload.pondId ? String(payload.pondId) : null,
           recordedById: userId,
-          recordedAt: payload.recordedAt ? new Date(payload.recordedAt) : undefined,
         },
-      });
+      }));
     }
 
     case 'pond_update': {

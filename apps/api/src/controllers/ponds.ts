@@ -91,13 +91,14 @@ function buildHarvestProjection(pond: {
 
 export async function getPonds(req: AuthRequest, res: Response) {
   const ponds = await prisma.pond.findMany({
-    where: {},
+    where: req.userRole === 'WORKER' ? { assignedUserId: req.userId } : {},
     orderBy: { number: 'asc' },
     include: {
       site: true,
       assignedUser: { select: { id: true, name: true, email: true } },
       current_batch: true,
       attachments: true,
+      growthMeasurements: { orderBy: { measuredAt: 'desc' }, include: { worker: { select: { id: true, name: true, email: true } } } },
     },
   });
 
@@ -119,14 +120,18 @@ export async function getPond(req: AuthRequest, res: Response) {
     },
   });
   if (!pond) return res.status(404).json({ error: 'Pond not found' });
+  if (req.userRole === 'WORKER' && pond.assignedUserId !== req.userId) {
+    return res.status(403).json({ error: 'You can only view ponds assigned to you.' });
+  }
 
   // load related logs separately to avoid typed include mismatches
-  const [feedLogs, waterLogs, mortalityLogs, harvestLogs, growthMeasurements] = await Promise.all([
+  const [feedLogs, waterLogs, mortalityLogs, harvestLogs, growthMeasurements, auditLogs] = await Promise.all([
     prisma.feedingLog.findMany({ where: { pondId: id }, orderBy: { date: 'desc' }, include: { worker: { select: { id: true, name: true, email: true } } } }),
-    prisma.waterQualityLog.findMany({ where: { pondId: id }, orderBy: { measuredAt: 'desc' }, take: 1, include: { worker: { select: { id: true, name: true, email: true } } } }),
+    prisma.waterQualityLog.findMany({ where: { pondId: id }, orderBy: { measuredAt: 'desc' }, include: { worker: { select: { id: true, name: true, email: true } } } }),
     prisma.mortalityLog.findMany({ where: { pondId: id }, orderBy: { observedAt: 'desc' }, include: { worker: { select: { id: true, name: true, email: true } } } }),
     prisma.harvestLog.findMany({ where: { pondId: id }, orderBy: { recordedAt: 'desc' }, include: { worker: { select: { id: true, name: true, email: true } } } }),
     prisma.growthMeasurement.findMany({ where: { pondId: id }, orderBy: { measuredAt: 'desc' }, include: { worker: { select: { id: true, name: true, email: true } } } }),
+    prisma.auditLog.findMany({ where: { tableName: 'Pond', recordId: id }, orderBy: { createdAt: 'desc' }, include: { user: { select: { id: true, name: true, email: true, role: { select: { name: true } } } } } }),
   ]);
 
   const latestWater = waterLogs[0] || null;
@@ -138,14 +143,16 @@ export async function getPond(req: AuthRequest, res: Response) {
   const totalHarvested = harvestLogs.reduce((sum: number, h: HarvestLog) => sum + (h.numberHarvested || 0), 0);
 
   const initialStock = pond.initial_population ?? pond.current_population ?? 0;
-  const currentLive = initialStock - totalMortality - totalHarvested;
+  const currentLive = Math.max(0, initialStock - totalMortality - totalHarvested);
 
   const fedToday = feedLogs.some((f: FeedingLog) => new Date(f.date) >= today);
   const todayFeedKg = feedLogs.filter((f: FeedingLog) => new Date(f.date) >= today).reduce((s: number, f: FeedingLog) => s + (f.quantityKg || 0), 0);
   const todayMortality = mortalityLogs.filter((m: MortalityLog) => new Date(m.observedAt) >= today).reduce((s: number, m: MortalityLog) => s + (m.numberDead || 0), 0);
 
   const latestFeedSize = latestFeeding?.feedSize || null;
-  const recommendedFeedSize = getRecommendedFeedSize(latestGrowth?.avgWeightGrams ?? pond.initialAvgWeightG ?? null);
+  const currentAvgWeight = latestGrowth?.avgWeightGrams ?? pond.initialAvgWeightG ?? null;
+  const recommendedFeedSize = getRecommendedFeedSize(currentAvgWeight);
+  const recommendedFeedKg = Number(((currentLive * Number(currentAvgWeight || 0) * 0.03) / 1000).toFixed(2));
   const todayFeedLogs = feedLogs.filter((f: FeedingLog) => new Date(f.date) >= today);
 
   const summary = {
@@ -170,6 +177,8 @@ export async function getPond(req: AuthRequest, res: Response) {
     behavior: latestFeeding?.observation || null,
     reactive: latestFeeding?.appetite ? latestFeeding.appetite >= 4 : null,
     latestFeedSize,
+    currentAvgWeight,
+    recommendedFeedKg,
     latestFeedType: latestFeeding?.feedType || null,
     recommendedFeedSize,
     ph: latestWater?.ph ?? null,
@@ -185,7 +194,7 @@ export async function getPond(req: AuthRequest, res: Response) {
     harvestHistory: harvestLogs.map((h) => ({ recordedAt: h.recordedAt, numberHarvested: h.numberHarvested, avgWeightGrams: h.avgWeightGrams, biomassKg: h.biomassKg })),
   };
 
-  res.json({ pond: { ...pond, feedLogs, mortalityLogs, harvestLogs, growthMeasurements }, summary });
+  res.json({ pond: { ...pond, feedLogs, waterLogs, mortalityLogs, harvestLogs, growthMeasurements, auditLogs }, summary });
 }
 
 function workerCanAccessPond(assignedUserId: string | null | undefined, workerId?: string) {
@@ -196,7 +205,7 @@ export async function createPond(req: AuthRequest, res: Response) {
   if (req.userRole === 'WORKER') {
     return res.status(403).json({ error: 'Workers cannot create ponds' });
   }
-  const { siteId, number, species, capacity, currentVolume, status, createdAt, initialPopulation, stockedAt, initialAvgWeightG, targetHarvestKg, expectedGrowthGDay, assignedUserId } = req.body as {
+  const { siteId, number: requestedNumber, species, capacity, currentVolume, status, initialPopulation, initialAvgWeightG, targetHarvestKg, targetHarvestDate, expectedGrowthGDay, assignedUserId, recommendedFeedSize } = req.body as {
     siteId?: string;
     number?: number;
     species?: string;
@@ -205,39 +214,84 @@ export async function createPond(req: AuthRequest, res: Response) {
     status?: string;
     createdAt?: string;
     initialPopulation?: number;
-    stockedAt?: string;
     initialAvgWeightG?: number;
     targetHarvestKg?: number;
+    targetHarvestDate?: string;
     expectedGrowthGDay?: number;
     assignedUserId?: string | null;
+    recommendedFeedSize?: string | null;
   };
 
-  if (!siteId || !number || !species || !capacity) {
-    return res.status(400).json({ error: 'siteId, number, species, and capacity are required' });
+  if (!species || !Number.isInteger(initialPopulation) || !initialPopulation || initialPopulation <= 0) {
+    return res.status(400).json({ error: 'A fish species and a positive whole-number initial population are required.' });
   }
 
-  const pond = await prisma.pond.create({
-    data: {
-      siteId,
-      number,
-      species: species as any,
-      capacity,
-      current_volume: currentVolume ?? null,
-      initial_population: initialPopulation ?? null,
-      current_population: initialPopulation ?? null,
-      stockedAt: stockedAt ? new Date(stockedAt) : null,
-      initialAvgWeightG: initialAvgWeightG ?? null,
-      targetHarvestKg: targetHarvestKg ?? null,
-      expectedGrowthGDay: expectedGrowthGDay ?? null,
-      assignedUserId: assignedUserId || null,
-      status: (status as any) || 'ACTIVE',
-      createdAt: createdAt ? new Date(createdAt) : undefined,
-    },
-    include: {
-      site: true,
-      assignedUser: { select: { id: true, name: true, email: true } },
-    },
-  });
+  const resolvedCapacity = capacity ?? 5000;
+
+  let pond;
+  try {
+    pond = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(74152861)`;
+      let selectedSite = siteId
+        ? await tx.farmSite.findUnique({ where: { id: siteId }, select: { id: true } })
+        : await tx.farmSite.findFirst({
+          where: { farm: { ownerId: req.userId } },
+          orderBy: { createdAt: 'asc' },
+          select: { id: true },
+        });
+
+      if (siteId && !selectedSite) {
+        throw new Error('The selected farm site does not exist.');
+      }
+      if (!selectedSite) {
+        const farm = await tx.farm.create({
+          data: {
+            name: 'AquaCulture Farm',
+            ownerId: req.userId || '',
+            sites: { create: { name: 'AquaCulture Farm - Main Site', location: 'Farm site', timezone: 'UTC' } },
+          },
+          include: { sites: { take: 1, select: { id: true } } },
+        });
+        selectedSite = farm.sites[0] || null;
+      }
+      if (!selectedSite) {
+        throw new Error('A farm site could not be created for this pond.');
+      }
+
+      const highestNumberedPond = await tx.pond.findFirst({ orderBy: { number: 'desc' }, select: { number: true } });
+      const number = Math.max(requestedNumber || 0, (highestNumberedPond?.number ?? 0) + 1);
+      return tx.pond.create({
+        data: {
+          siteId: selectedSite.id,
+          number,
+          species: species as any,
+          capacity: resolvedCapacity,
+          current_volume: currentVolume ?? null,
+          initial_population: initialPopulation,
+          current_population: initialPopulation,
+          stockedAt: new Date(),
+          initialAvgWeightG: initialAvgWeightG ?? null,
+          targetHarvestKg: targetHarvestKg ?? null,
+          targetHarvestDate: targetHarvestDate ? new Date(targetHarvestDate) : null,
+          expectedGrowthGDay: expectedGrowthGDay ?? null,
+          recommendedFeedSize: recommendedFeedSize || null,
+          assignedUserId: assignedUserId || null,
+          status: (status as any) || 'ACTIVE',
+        },
+        include: {
+          site: true,
+          assignedUser: { select: { id: true, name: true, email: true } },
+        },
+      });
+    });
+  } catch (error) {
+    console.error('Failed to create pond', error);
+    return res.status(400).json({
+      error: error instanceof Error && error.message.startsWith('The selected farm site')
+        ? error.message
+        : 'Pond registration failed. Verify your farm setup and pond details, then try again.',
+    });
+  }
 
   // generate and save QR code data URI into pond record
   try {
@@ -280,6 +334,16 @@ export async function updatePond(req: AuthRequest, res: Response) {
     }
 
     const pond = await prisma.pond.update({ where: { id }, data, include: { site: true, assignedUser: true, attachments: true } });
+
+    await prisma.auditLog.create({
+      data: {
+        userId: req.userId || null,
+        action: 'POND_UPDATED',
+        tableName: 'Pond',
+        recordId: pond.id,
+        meta: { fields: Object.keys(data) },
+      },
+    });
 
     const workerIds = new Set<string>();
     if (data.assignedUserId) workerIds.add(data.assignedUserId);

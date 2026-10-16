@@ -15,6 +15,7 @@ enum RoleName {
 // Enterprise-grade core models
 model User {
   id              String            @id @default(uuid())
+  reportId           String              @unique
   email           String            @unique
   name            String?
   password        String
@@ -135,6 +136,7 @@ model Pond {
 
 model FinanceRecord {
   id          String              @id @default(uuid())
+  transactionId String            @unique
   type        FinanceRecordType
   category    String
   description String?
@@ -246,6 +248,7 @@ model GrowthMeasurement {
 
 model InventoryItem {
   id           String                 @id @default(uuid())
+  reportId     String                 @unique
   sku          String?                @unique
   name         String
   category     String
@@ -303,6 +306,7 @@ model AuditLog {
 // Task & notification models
 model Task {
   id          String           @id @default(uuid())
+  reportId    String           @unique
   title       String
   description String?
   creator     User             @relation(fields: [creatorId], references: [id])
@@ -312,6 +316,7 @@ model Task {
   status      TaskStatus       @default(OPEN)
   priority    TaskPriority     @default(MEDIUM)
   dueAt       DateTime?
+  completedAt DateTime?
   checklist   Json?
   photos      Attachment[]     @relation("task_attachments")
   createdAt   DateTime         @default(now())

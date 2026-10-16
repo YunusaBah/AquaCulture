@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { AuthRequest } from '../middleware/auth';
 import { createNotificationForUser } from './notifications';
+import { nextReportReference } from '../lib/financeTransactionId';
 
 export async function listTasks(req: AuthRequest, res: Response) {
   const where = req.userRole === 'WORKER' ? { assignees: { some: { userId: req.userId } } } : {};
@@ -21,8 +22,9 @@ export async function createTask(req: AuthRequest, res: Response) {
   const { title, description, assigneeIds, dueAt, priority, checklist } = req.body as any;
   if (!title) return res.status(400).json({ error: 'title is required' });
 
-  const task = await prisma.task.create({
+  const task = await prisma.$transaction(async (tx) => tx.task.create({
     data: {
+      reportId: await nextReportReference(tx),
       title,
       description,
       creatorId: req.userId!,
@@ -34,7 +36,7 @@ export async function createTask(req: AuthRequest, res: Response) {
       },
     },
     include: { assignees: { include: { user: true } }, creator: true },
-  });
+  }));
 
   await Promise.all((assigneeIds || []).map((userId: string) => createNotificationForUser(
     userId,
@@ -70,7 +72,14 @@ export async function updateTaskStatus(req: AuthRequest, res: Response) {
   }
 
   // Cast incoming string to the generated enum type via any to satisfy TS
-  const task = await prisma.task.update({ where: { id }, data: { status: status as any } });
+  const task = await prisma.task.update({
+    where: { id },
+    data: {
+      status: status as any,
+      completedAt: status === 'COMPLETED' ? new Date() : null,
+    },
+    include: { assignees: { include: { user: true } }, creator: true },
+  });
   res.json({ task });
 }
 

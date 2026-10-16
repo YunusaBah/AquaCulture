@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { AuthRequest } from '../middleware/auth';
+import { nextReportReference } from '../lib/financeTransactionId';
 
 export async function getInventory(req: AuthRequest, res: Response) {
   const items = await prisma.inventoryItem.findMany({
@@ -8,7 +9,6 @@ export async function getInventory(req: AuthRequest, res: Response) {
     include: {
       transactions: {
         orderBy: { createdAt: 'desc' },
-        take: 5,
         include: { pond: { select: { number: true } } },
       },
     },
@@ -40,8 +40,9 @@ export async function createInventoryItem(req: AuthRequest, res: Response) {
   const initialStock = Number(currentStock ?? 0);
   const minimumStock = Number(minStock ?? 0);
 
-  const item = await prisma.inventoryItem.create({
+  const item = await prisma.$transaction(async (tx) => tx.inventoryItem.create({
     data: {
+      reportId: await nextReportReference(tx),
       name,
       category,
       unit,
@@ -56,7 +57,7 @@ export async function createInventoryItem(req: AuthRequest, res: Response) {
       } : undefined,
     },
     include: { transactions: { include: { pond: { select: { number: true } } } } },
-  });
+  }));
 
   res.status(201).json({ item });
 }
@@ -91,7 +92,7 @@ export async function adjustInventoryItem(req: AuthRequest, res: Response) {
     const current = await tx.inventoryItem.update({
       where: { id: itemId },
       data: { currentStock: nextStock },
-      include: { transactions: { orderBy: { createdAt: 'desc' }, take: 5, include: { pond: { select: { number: true } } } } },
+      include: { transactions: { orderBy: { createdAt: 'desc' }, include: { pond: { select: { number: true } } } } },
     });
 
     await tx.inventoryTransaction.create({

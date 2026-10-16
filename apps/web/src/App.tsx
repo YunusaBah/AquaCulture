@@ -27,9 +27,12 @@ import {
 import { hasPermission } from './lib/permissions';
 import { createPortal } from 'react-dom';
 import { AuthShell } from './components/AuthShell';
+import { AdminReports } from './components/AdminReports';
+import { PondRegistryTable, type PondQuickAction } from './components/PondRegistryTable';
 
 type CurrentUser = {
   id: string;
+  reportId?: string;
   email: string;
   name: string | null;
   role: 'OWNER' | 'WORKER';
@@ -95,7 +98,7 @@ const ownerNav = [
   { id: 'command', label: "Today's Analytics", icon: Activity },
   { id: 'ponds', label: 'Ponds', icon: Fish },
   { id: 'tasks', label: 'Tasks', icon: ClipboardList },
-  { id: 'workers', label: 'Workers', icon: Users },
+  { id: 'workers', label: 'Users', icon: Users },
   { id: 'finance', label: 'Finance', icon: Wallet },
   { id: 'reports', label: 'Reports', icon: FileText },
   { id: 'inventory', label: 'Inventory', icon: Package },
@@ -153,6 +156,13 @@ function formatFinanceType(value: string) {
   return financeTypeLabels[normalized] || titleCase(normalized || value);
 }
 
+function normalizeFinanceType(value: string) {
+  if (value === 'INCOME') return 'SALES';
+  if (value === 'EXPENSE') return 'RUNNING_COST';
+  if (value === 'BUDGET') return 'FIXED_COST';
+  return value;
+}
+
 function getInventoryUnitForCategory(category: string) {
   return inventoryUnitByCategory[category] || 'units';
 }
@@ -190,7 +200,12 @@ function App() {
   const [registerConfirmPassword, setRegisterConfirmPassword] = useState('');
   const [registerCode, setRegisterCode] = useState('');
   const [workerForm, setWorkerForm] = useState({ fullName: '', email: '', password: '' });
-  const [activeNav, setActiveNav] = useState('command');
+  const [activeNav, setActiveNav] = useState(() => (currentUser?.role === 'OWNER' && window.location.pathname.startsWith('/admin/reports'))
+    || (currentUser?.role === 'WORKER' && window.location.pathname.startsWith('/reports'))
+    ? 'reports'
+    : window.location.pathname === '/ponds' ? 'ponds' : 'command');
+  const [reportDataLoading, setReportDataLoading] = useState(true);
+  const [reportDataError, setReportDataError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth > 1120));
   const [profileOpen, setProfileOpen] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -286,6 +301,9 @@ function App() {
   }, [sidebarOpen, profileOpen]);
   const [loading, setLoading] = useState(false);
   const [reportRange, setReportRange] = useState<'daily' | 'weekly' | 'monthly' | 'yearly'>('weekly');
+  const [financeLedgerFilter, setFinanceLedgerFilter] = useState<'ALL' | 'RUNNING_COST' | 'FIXED_COST' | 'SALES'>('ALL');
+  const [reportFinanceFilter, setReportFinanceFilter] = useState<'ALL' | 'RUNNING_COST' | 'FIXED_COST' | 'SALES'>('ALL');
+  const [reportPondFilter, setReportPondFilter] = useState('ALL');
   const [data, setData] = useState<ApiState>(emptyState);
   const [fieldNote, setFieldNote] = useState('Fed Pond 3. Fish appetite was strong. No dead fish. Water level normal.');
   const [selectedPondId, setSelectedPondId] = useState<string | null>(null);
@@ -686,23 +704,20 @@ function App() {
     setHarvestModal({ open: false, details: undefined, resolver: null });
   }
   const [newPond, setNewPond] = useState({
-    siteName: '',
-    number: '',
     species: 'TILAPIA',
-    capacity: '',
     initialPopulation: '',
-    stockedAt: '',
-    initialAvgWeightG: '',
     targetHarvestKg: '',
-    targetHarvestUnit: 'g' as 'g' | 'kg',
+    feedSize: '4mm',
+    targetHarvestDate: '',
     assignedUserId: 'all',
   });
+  const [pondCreateSubmitting, setPondCreateSubmitting] = useState(false);
   const [adminActionModal, setAdminActionModal] = useState<{ type: 'targetHarvest' | 'harvestQuantity' | 'recommendFeed' | 'mortality' | 'restock' } | null>(null);
   const [quickPondUpdateOpen, setQuickPondUpdateOpen] = useState(false);
   const [targetHarvestAction, setTargetHarvestAction] = useState({ pondId: '', date: '', time: '09:00', quantity: '' });
   const [harvestQuantityAction, setHarvestQuantityAction] = useState({ pondId: '', quantity: '', avgWeightGrams: '', biomassKg: '', method: '', destination: '' });
   const [recommendFeedAction, setRecommendFeedAction] = useState({ pondId: '', inventoryItemId: '', feedSize: '1mm', quantityKg: '1' });
-  const [mortalityAction, setMortalityAction] = useState({ pondId: '', count: '', cause: '', observedAt: '' });
+  const [mortalityAction, setMortalityAction] = useState({ pondId: '', count: '', cause: '' });
   const [showPondCreateModal, setShowPondCreateModal] = useState(false);
   const [financeForm, setFinanceForm] = useState({
     type: 'RUNNING_COST',
@@ -744,6 +759,42 @@ function App() {
   const navItems = isOwner ? ownerNav : workerNav;
   const [selectedAnalyticsMetric, setSelectedAnalyticsMetric] = useState<'health' | 'feed' | 'mortality' | 'profit' | 'ponds'>('health');
   const [selectedAnalyticsRange, setSelectedAnalyticsRange] = useState<'daily' | 'weekly' | 'monthly' | 'yearly'>('daily');
+
+  useEffect(() => {
+    const handleReportRoute = () => {
+      if (window.location.pathname.startsWith('/admin/reports') || window.location.pathname.startsWith('/reports')) {
+        if (currentUser?.role === 'OWNER' || currentUser?.role === 'WORKER') setActiveNav('reports');
+        else {
+          window.history.replaceState({}, '', '/');
+          setActiveNav('command');
+        }
+      } else if (window.location.pathname === '/ponds') {
+        setActiveNav('ponds');
+      } else if (window.location.pathname === '/pond-tools' || window.location.pathname === '/admin/pond-tools') {
+        window.history.replaceState({}, '', '/ponds');
+        setActiveNav('ponds');
+      } else if (activeNav === 'reports') {
+        setActiveNav('command');
+      }
+    };
+    window.addEventListener('popstate', handleReportRoute);
+    handleReportRoute();
+    return () => window.removeEventListener('popstate', handleReportRoute);
+  }, [activeNav, currentUser]);
+
+  const navigateToSection = (sectionId: string) => {
+    if (sectionId === 'reports' && (isOwner || currentUser?.role === 'WORKER')) {
+      window.history.pushState({}, '', isOwner ? '/admin/reports' : '/reports');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    } else if (sectionId === 'ponds') {
+      window.history.pushState({}, '', '/ponds');
+    } else if (window.location.pathname.startsWith('/admin/')) {
+      window.history.pushState({}, '', '/');
+    }
+    setActiveNav(sectionId);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (window.innerWidth <= 1120) setSidebarOpen(false);
+  };
 
   const readQueuedSyncEntries = useCallback(() => {
     if (typeof window === 'undefined') return [] as Array<Record<string, any>>;
@@ -952,28 +1003,50 @@ function App() {
 
   const loadData = useCallback(async () => {
     if (!token) return;
+    setReportDataLoading(true);
+    setReportDataError(null);
     const headers = { Authorization: token ? 'Bearer ' + token : '' };
-    const [farmsRes, pondsRes, feedingsRes, waterRes, mortalityRes, harvestsRes, inventoryRes, tasksRes, financeRes, notificationsRes] = await Promise.all([
-      fetch(`${apiBaseUrl}/farms`, { headers }),
-      fetch(`${apiBaseUrl}/ponds`, { headers }),
-      fetch(`${apiBaseUrl}/feedings`, { headers }),
-      fetch(`${apiBaseUrl}/water-quality`, { headers }),
-      fetch(`${apiBaseUrl}/mortality`, { headers }),
-      fetch(`${apiBaseUrl}/harvests`, { headers }),
-      fetch(`${apiBaseUrl}/inventory`, { headers }),
-      fetch(`${apiBaseUrl}/tasks`, { headers }),
-      fetch(`${apiBaseUrl}/finance`, { headers }),
-      fetch(`${apiBaseUrl}/notifications`, { headers }),
-    ]);
+    let responses: Response[];
+    try {
+      responses = await Promise.all([
+        fetch(`${apiBaseUrl}/farms`, { headers }),
+        fetch(`${apiBaseUrl}/ponds`, { headers }),
+        fetch(`${apiBaseUrl}/feedings`, { headers }),
+        fetch(`${apiBaseUrl}/water-quality`, { headers }),
+        fetch(`${apiBaseUrl}/mortality`, { headers }),
+        fetch(`${apiBaseUrl}/harvests`, { headers }),
+        fetch(`${apiBaseUrl}/inventory`, { headers }),
+        fetch(`${apiBaseUrl}/tasks`, { headers }),
+        fetch(`${apiBaseUrl}/finance`, { headers }),
+        fetch(`${apiBaseUrl}/notifications`, { headers }),
+        fetch(`${apiBaseUrl}/auth/me`, { headers }),
+      ]);
+    } catch (loadError) {
+      console.error('Failed to load report data', loadError);
+      setReportDataError('Report data could not be loaded. Check the connection and refresh to try again.');
+      setReportDataLoading(false);
+      return;
+    }
+    const [farmsRes, pondsRes, feedingsRes, waterRes, mortalityRes, harvestsRes, inventoryRes, tasksRes, financeRes, notificationsRes, currentUserRes] = responses;
 
-    if ([farmsRes, pondsRes, feedingsRes, waterRes, mortalityRes, harvestsRes, inventoryRes, tasksRes, financeRes, notificationsRes].some((response) => response.status === 401)) {
+    if (currentUserRes.status === 401) {
       localStorage.removeItem('aquaculture-token');
       localStorage.removeItem('aquaculture-user');
       setToken(null);
       setCurrentUser(null);
       setError('Your session expired. Please sign in again.');
+      setReportDataLoading(false);
       return;
     }
+
+    const unavailableSources = ([
+      ['farms', farmsRes], ['ponds', pondsRes], ['feeding', feedingsRes], ['water quality', waterRes],
+      ['mortality', mortalityRes], ['harvest', harvestsRes], ['inventory', inventoryRes], ['tasks', tasksRes], ['finance', financeRes],
+      ['profile', currentUserRes],
+    ] as Array<[string, Response]>)
+      .filter(([name, response]) => !response.ok && !(currentUser?.role === 'WORKER' && ['farms', 'inventory', 'finance'].includes(name)))
+      .map(([name]) => name);
+    setReportDataError(unavailableSources.length ? `Some report data is unavailable: ${unavailableSources.join(', ')}.` : null);
 
     const next = { ...emptyState };
     if (farmsRes.ok) next.farms = (await farmsRes.json()).farms || [];
@@ -993,8 +1066,20 @@ function App() {
       next.financeRecords = finance.records || [];
     }
     if (notificationsRes.ok) next.notifications = (await notificationsRes.json()).notifications || [];
+    if (currentUserRes.ok) {
+      const profile = await currentUserRes.json().catch(() => ({}));
+      if (profile.user?.id) {
+        setCurrentUser((current) => {
+          if (!current || current.id !== profile.user.id) return current;
+          const updated = { ...current, ...profile.user } as CurrentUser;
+          localStorage.setItem('aquaculture-user', JSON.stringify(updated));
+          return updated;
+        });
+      }
+    }
     setData(next);
-  }, [apiBaseUrl, token]);
+    setReportDataLoading(false);
+  }, [apiBaseUrl, currentUser?.role, token]);
 
   const loadWorkerRoster = useCallback(async () => {
     if (!token || !isOwner) {
@@ -1070,6 +1155,19 @@ function App() {
   }, [refreshDashboard]);
 
   useEffect(() => {
+    if (!token || activeNav !== 'ponds') return undefined;
+    let refreshing = false;
+    const interval = window.setInterval(() => {
+      if (refreshing) return;
+      refreshing = true;
+      refreshDashboard()
+        .catch((err) => console.error('Failed to refresh pond registry', err))
+        .finally(() => { refreshing = false; });
+    }, 15000);
+    return () => window.clearInterval(interval);
+  }, [activeNav, refreshDashboard, token]);
+
+  useEffect(() => {
     if (token && isOwner) {
       void loadWorkerRoster();
     } else {
@@ -1130,9 +1228,7 @@ function App() {
 
   useEffect(() => {
     const handleResize = () => {
-      if (window.innerWidth > 1120) {
-        setSidebarOpen(true);
-      }
+      setSidebarOpen(window.innerWidth > 1120);
     };
 
     window.addEventListener('resize', handleResize);
@@ -1170,6 +1266,18 @@ function App() {
     if (!token || !pondId) return;
 
     const feedGrams = Number(pondLogForm.feedGrams) || Number(pondLogForm.feedKg) || 0;
+    if (feedGrams <= 0) {
+      setToastMessage('Enter the feed amount in grams.');
+      return;
+    }
+    if (!pondLogForm.feedSize || !pondLogForm.appetite || !pondLogForm.behavior) {
+      setToastMessage('Feed size, appetite, and behavior are required.');
+      return;
+    }
+    if (Number(pondLogForm.mortality) > 0 && !pondLogForm.mortalityCause.trim()) {
+      setToastMessage('Enter a mortality cause when mortality is recorded.');
+      return;
+    }
     const feedKgValue = feedGrams > 0 ? Number((feedGrams / 1000).toFixed(3)) : Number(pondLogForm.feedKg) || 0;
     const normalizedFeedSize = pondLogForm.feedSize || '4mm';
     const feedValidation = validateFeedUsage(feedKgValue, pondLogForm.inventoryItemId || undefined, normalizedFeedSize);
@@ -1415,39 +1523,8 @@ function App() {
   const visiblePonds = useMemo(() => {
     if (isOwner) return data.ponds;
     const currentUserId = currentUser?.id;
-    const recentPondIds = new Set<string>();
-    if (currentUserId) {
-      data.feedings.forEach((entry) => {
-        const workerId = entry.workerId || entry.worker?.id;
-        if (workerId === currentUserId) recentPondIds.add(entry.pondId);
-      });
-      data.waterLogs.forEach((entry) => {
-        const workerId = entry.workerId || entry.worker?.id;
-        if (workerId === currentUserId) recentPondIds.add(entry.pondId);
-      });
-      data.mortalityLogs.forEach((entry) => {
-        const workerId = entry.workerId || entry.worker?.id;
-        if (workerId === currentUserId) recentPondIds.add(entry.pondId);
-      });
-    }
-
-    const assignedPondIds = new Set(
-      data.ponds
-        .filter((pond) => {
-          const assignedUserId = String(pond.assignedUserId || '').trim();
-          const assignedUserEmail = String(pond.assignedUser?.email || '').trim();
-          const assignedUserName = String(pond.assignedUser?.name || '').trim();
-          const allWorkersAssigned = !pond.assignedUserId || assignedUserId === 'all' || assignedUserEmail === 'all' || assignedUserName === 'all';
-          return allWorkersAssigned
-            || pond.assignedUserId === currentUserId
-            || pond.assignedUser?.id === currentUserId
-            || pond.assignedUser?.email === currentUser?.email;
-        })
-        .map((pond) => pond.id)
-    );
-
-    return data.ponds.filter((pond) => assignedPondIds.has(pond.id) || recentPondIds.has(pond.id));
-  }, [currentUser, data.feedings, data.mortalityLogs, data.ponds, data.waterLogs, isOwner]);
+    return data.ponds.filter((pond) => pond.assignedUserId === currentUserId || pond.assignedUser?.id === currentUserId);
+  }, [currentUser?.id, data.ponds, isOwner]);
 
   const overview = useMemo(() => {
     const totalFeed = data.feedings.reduce((sum, item) => sum + Number(item.quantityKg || 0), 0);
@@ -1475,7 +1552,10 @@ function App() {
       return differenceMs <= yearMs;
     };
 
-    const financeRecords = data.financeRecords.filter((record) => periodMatches(record.recordedAt || record.createdAt));
+    const financeRecords = data.financeRecords.filter((record) =>
+      periodMatches(record.recordedAt || record.createdAt)
+      && (reportFinanceFilter === 'ALL' || normalizeFinanceType(record.type) === reportFinanceFilter)
+    );
     const harvestRecords = data.harvests.filter((record) => periodMatches(record.recordedAt || record.createdAt));
     const pondRecords = data.ponds.filter((pond) => periodMatches(pond.stockedAt || pond.createdAt));
     const sales = financeRecords.filter((record) => record.type === 'SALES' || record.type === 'INCOME').reduce((sum, record) => sum + Number(record.amount || 0), 0);
@@ -1507,9 +1587,12 @@ function App() {
       activePonds: pondRecords.filter((pond) => Number(pond.current_population || 0) > 0).length,
       lowStockItems: data.inventoryItems.filter((item) => Number(item.currentStock || 0) <= Number(item.minStock || 0)).length,
       workerPerformance,
-      recentRows: [...data.financeRecords, ...data.harvests].slice(0, 6),
+      recentRows: data.financeRecords.filter((record) =>
+        (reportFinanceFilter === 'ALL' || normalizeFinanceType(record.type) === reportFinanceFilter)
+        && (reportPondFilter === 'ALL' || record.pondId === reportPondFilter)
+      ).slice(0, 6),
     };
-  }, [data, reportRange, workers]);
+  }, [data, reportFinanceFilter, reportPondFilter, reportRange, workers]);
 
   const buildWorkerReportSummary = useCallback((user: CurrentUser | any) => {
     const recentPondIds = new Set<string>([
@@ -2078,7 +2161,6 @@ function App() {
         pondId,
         numberDead: count,
         possibleCause: mortalityAction.cause || 'Unspecified',
-        observedAt: mortalityAction.observedAt || new Date().toISOString(),
       }),
     });
 
@@ -2090,7 +2172,7 @@ function App() {
     }
 
     setAdminActionModal(null);
-    setMortalityAction({ pondId: '', count: '', cause: '', observedAt: '' });
+    setMortalityAction({ pondId: '', count: '', cause: '' });
     setToastMessage('Mortality record saved.');
     await refreshDashboard();
     if (selectedPondId === pondId) await openPond(pondId);
@@ -2098,113 +2180,80 @@ function App() {
 
   async function handleCreatePond(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!token || !isOwner) return;
+    if (!token || !isOwner || pondCreateSubmitting) return;
 
-    const siteName = newPond.siteName.trim();
-    const pondNumber = Number(newPond.number);
-    const capacity = Number(newPond.capacity);
-    const initialPopulation = Number(newPond.initialPopulation) || undefined;
-    const targetHarvestValue = Number(newPond.targetHarvestKg) || undefined;
-    const targetHarvestKg = targetHarvestValue !== undefined
-      ? Number((newPond.targetHarvestUnit === 'g' ? targetHarvestValue / 1000 : targetHarvestValue).toFixed(6))
-      : undefined;
+    const initialPopulation = Number(newPond.initialPopulation);
+    const targetWeightGrams = Number(newPond.targetHarvestKg);
+    const pondNumber = Math.max(0, ...data.ponds.map((pond) => Number(pond.number) || 0)) + 1;
+    const targetHarvestKg = Number((targetWeightGrams / 1000).toFixed(6));
     const assignedUserId = newPond.assignedUserId && newPond.assignedUserId !== 'all' ? newPond.assignedUserId : undefined;
 
-    if (!siteName) {
-      setToastMessage('Site name is required.');
-      return;
-    }
-    if (!Number.isInteger(pondNumber) || pondNumber <= 0) {
-      setToastMessage('Pond number must be a positive whole number.');
-      return;
-    }
-    if (!Number.isFinite(capacity) || capacity <= 0) {
-      setToastMessage('Water volume must be greater than zero.');
-      return;
-    }
-    if (!initialPopulation || !Number.isFinite(initialPopulation) || initialPopulation <= 0) {
+    if (!Number.isInteger(initialPopulation) || initialPopulation <= 0) {
       setToastMessage('Initial stock fish is required.');
       return;
     }
-    if (!newPond.stockedAt) {
-      setToastMessage('Stocked on date is required.');
-      return;
-    }
-    if (!newPond.initialAvgWeightG || Number(newPond.initialAvgWeightG) <= 0) {
-      setToastMessage('Initial average weight is required.');
-      return;
-    }
-    if (!newPond.targetHarvestKg || Number(newPond.targetHarvestKg) <= 0) {
+    if (!Number.isFinite(targetWeightGrams) || targetWeightGrams <= 0) {
       setToastMessage('Target harvest weight is required.');
       return;
     }
 
-    const siteKey = siteName.toLowerCase();
-    if (data.ponds.some((pond) => String(pond.site?.name || '').trim().toLowerCase() === siteKey && Number(pond.number) === pondNumber)) {
-      setToastMessage('A pond with this number already exists in that site.');
-      return;
-    }
+    const siteName = 'AquaCulture Farm - Main Site';
 
-    if (!navigator.onLine) {
-      queueOfflineSyncEntry('pond_create', {
-        siteName,
-        number: pondNumber,
-        species: newPond.species,
-        capacity,
-        initialPopulation,
-        stockedAt: newPond.stockedAt || undefined,
-        initialAvgWeightG: Number(newPond.initialAvgWeightG) || undefined,
-        targetHarvestKg,
-        assignedUserId,
-      }, 'pond');
-      setNewPond({ siteName: '', number: '', species: 'TILAPIA', capacity: '', initialPopulation: '', stockedAt: '', initialAvgWeightG: '', targetHarvestKg: '', targetHarvestUnit: 'g', assignedUserId: 'all' });
+    setPondCreateSubmitting(true);
+    try {
+      if (!navigator.onLine) {
+        queueOfflineSyncEntry('pond_create', {
+          siteName,
+          number: pondNumber,
+          species: newPond.species,
+          capacity: 5000,
+          initialPopulation,
+          stockedAt: new Date().toISOString(),
+          targetHarvestKg,
+          recommendedFeedSize: newPond.feedSize,
+          targetHarvestDate: newPond.targetHarvestDate || undefined,
+          assignedUserId,
+        }, 'pond');
+        setNewPond({ species: 'TILAPIA', initialPopulation: '', targetHarvestKg: '', feedSize: '4mm', targetHarvestDate: '', assignedUserId: 'all' });
+        setShowPondCreateModal(false);
+        setToastMessage('Pond queued for sync while offline.');
+        return;
+      }
+
+      const headers = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token };
+      const site = data.farms.flatMap((farm) => farm.sites || [])[0];
+      const pondRes = await fetch(`${apiBaseUrl}/ponds`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          ...(site?.id ? { siteId: site.id } : {}),
+          number: pondNumber,
+          species: newPond.species,
+          capacity: 5000,
+          initialPopulation,
+          stockedAt: new Date().toISOString(),
+          targetHarvestKg,
+          recommendedFeedSize: newPond.feedSize,
+          targetHarvestDate: newPond.targetHarvestDate || undefined,
+          assignedUserId,
+        }),
+      });
+      const pondBody = await pondRes.json().catch(() => ({}));
+      if (!pondRes.ok) {
+        setToastMessage(pondBody.error || pondBody.message || `Unable to register pond (${pondRes.status}).`);
+        return;
+      }
+
+      setNewPond({ species: 'TILAPIA', initialPopulation: '', targetHarvestKg: '', feedSize: '4mm', targetHarvestDate: '', assignedUserId: 'all' });
       setShowPondCreateModal(false);
-      setToastMessage('Pond queued for sync while offline.');
-      return;
+      setToastMessage(`${pondBody.pond?.number ? `POND-${String(pondBody.pond.number).padStart(3, '0')}` : 'Pond'} created successfully.`);
+      await refreshDashboard();
+    } catch (createError) {
+      console.error('Failed to register pond', createError);
+      setToastMessage('Unable to register pond. Check your connection and try again.');
+    } finally {
+      setPondCreateSubmitting(false);
     }
-
-    const headers = { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' };
-    const allSites = data.farms.flatMap((farm) => farm.sites || []);
-    let site = allSites.find((item) => String(item.name || '').trim().toLowerCase() === siteKey);
-    if (!site) {
-      const farmRes = await fetch(`${apiBaseUrl}/farms`, { method: 'POST', headers, body: JSON.stringify({ name: siteName }) });
-      const farmBody = await farmRes.json().catch(() => ({}));
-      if (!farmRes.ok) {
-        setToastMessage(farmBody.error || 'Unable to create the site for this pond.');
-        return;
-      }
-      site = farmBody.farm?.sites?.[0] || null;
-      if (!site) {
-        setToastMessage('The site was created without a usable site record.');
-        return;
-      }
-    }
-
-    const pondRes = await fetch(`${apiBaseUrl}/ponds`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        siteId: site.id,
-        number: pondNumber,
-        species: newPond.species,
-        capacity,
-        initialPopulation,
-        stockedAt: newPond.stockedAt || undefined,
-        initialAvgWeightG: Number(newPond.initialAvgWeightG) || undefined,
-        targetHarvestKg,
-        assignedUserId,
-      }),
-    });
-    const pondBody = await pondRes.json().catch(() => ({}));
-    if (!pondRes.ok) {
-      setToastMessage(pondBody.error || 'Unable to create pond.');
-      return;
-    }
-
-    setNewPond({ siteName: '', number: '', species: 'TILAPIA', capacity: '', initialPopulation: '', stockedAt: '', initialAvgWeightG: '', targetHarvestKg: '', targetHarvestUnit: 'g', assignedUserId: 'all' });
-    setShowPondCreateModal(false);
-    setToastMessage(`Pond ${pondNumber} created successfully.`);
-    await refreshDashboard();
   }
 
   const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; type: 'pond' | 'finance' | 'inventory' | 'worker' | 'task' | null; id?: string; label?: string }>({ open: false, type: null });
@@ -2742,7 +2791,7 @@ function App() {
 
   async function handleAssignPondToWorker(pondId: string, workerId: string) {
     if (!token || !isOwner || !pondId) return;
-    const normalizedWorkerId = workerId === 'all' ? undefined : workerId;
+    const normalizedWorkerId = workerId === 'all' || workerId === '' ? null : workerId;
 
     const response = await fetch(`${apiBaseUrl}/ponds/${pondId}`, {
       method: 'PUT',
@@ -2756,7 +2805,7 @@ function App() {
       return;
     }
 
-    setToastMessage(workerId === 'all' ? 'Pond assigned to all workers.' : 'Pond assigned to worker.');
+    setToastMessage(workerId === 'all' || workerId === '' ? 'Pond assignment cleared.' : 'Pond assigned to worker.');
     await refreshDashboard();
     if (selectedPondId === pondId) {
       await openPond(pondId);
@@ -2838,6 +2887,39 @@ function App() {
     if (!token || !selectedPondId) return;
     await submitPondUpdateForPond(selectedPondId);
   }
+
+  const pondUpdateReportRows = useMemo(() => {
+    const pondName = (pondId?: string) => {
+      const pond = data.ponds.find((item) => item.id === pondId);
+      return pond ? `Pond ${pond.number}` : '—';
+    };
+    const recorder = (entry: any) => entry.worker?.name || entry.user?.name || entry.worker?.email || entry.user?.email || '—';
+    const rows = [
+      ...data.feedings.map((entry: any) => ({
+        id: `feed-${entry.id}`, date: entry.createdAt, pond: pondName(entry.pondId), feedSize: entry.feedSize || '—',
+        feed: entry.quantityKg ? `${Number(entry.quantityKg) * 1000} g` : '—', appetite: entry.appetite || '—', behavior: entry.behavior || '—',
+        ph: '—', ammonia: '—', mortality: '—', cause: '—', weight: '—', note: entry.notes || entry.note || 'Feed update', recorder: recorder(entry),
+      })),
+      ...data.waterLogs.map((entry: any) => ({
+        id: `water-${entry.id}`, date: entry.createdAt || entry.recordedAt, pond: pondName(entry.pondId), feedSize: '—', feed: '—',
+        appetite: '—', behavior: entry.behavior || '—', ph: entry.ph ?? '—', ammonia: entry.ammonia ?? '—', mortality: '—', cause: '—',
+        weight: '—', note: entry.comment || entry.notes || 'Water update', recorder: recorder(entry),
+      })),
+      ...data.mortalityLogs.map((entry: any) => ({
+        id: `mortality-${entry.id}`, date: entry.observedAt || entry.createdAt, pond: pondName(entry.pondId), feedSize: '—', feed: '—',
+        appetite: '—', behavior: '—', ph: '—', ammonia: '—', mortality: entry.numberDead ?? '—', cause: entry.cause || entry.mortalityCause || '—',
+        weight: '—', note: entry.notes || 'Mortality update', recorder: recorder(entry),
+      })),
+    ];
+    return rows
+      .filter((row) => reportPondFilter === 'ALL' || data.ponds.find((pond) => `Pond ${pond.number}` === row.pond)?.id === reportPondFilter)
+      .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime());
+  }, [data.feedings, data.mortalityLogs, data.ponds, data.waterLogs, reportPondFilter]);
+
+  const financeLedgerRecords = useMemo(
+    () => data.financeRecords.filter((record) => financeLedgerFilter === 'ALL' || normalizeFinanceType(record.type) === financeLedgerFilter),
+    [data.financeRecords, financeLedgerFilter],
+  );
 
   if (!token) {
     return (
@@ -3147,6 +3229,8 @@ function App() {
             <div className="record-row"><strong>Assigned to</strong><span>{modalTask.assignees?.map((a: any) => a.user?.name).join(', ') || 'Unassigned'}</span></div>
             <div className="record-row"><strong>Priority</strong><span>{titleCase(modalTask.priority || 'MEDIUM')}</span></div>
             <div className="record-row"><strong>Status</strong><span>{titleCase(modalTask.status || 'OPEN')}</span></div>
+            <div className="record-row"><strong>Sent</strong><span>{modalTask.createdAt ? new Date(modalTask.createdAt).toLocaleString() : '—'}</span></div>
+            {modalTask.completedAt ? <div className="record-row"><strong>Completed</strong><span>{new Date(modalTask.completedAt).toLocaleString()}</span></div> : null}
 
                   <div style={{ marginTop: 8 }}>
                     <textarea placeholder="Add comment (optional)" value={taskComment} onChange={(e) => setTaskComment(e.target.value)} />
@@ -3207,6 +3291,14 @@ function App() {
       >
         ☰
       </button>
+      {sidebarOpen ? (
+        <button
+          type="button"
+          className="sidebar-backdrop"
+          aria-label="Close navigation"
+          onClick={() => setSidebarOpen(false)}
+        />
+      ) : null}
 
       <aside className={sidebarOpen ? 'sidebar open' : 'sidebar'}>
       <div className="brand-lockup">
@@ -3214,13 +3306,19 @@ function App() {
           {(currentUser?.name || 'AS').split(' ').map((p) => p.charAt(0)).slice(0,2).join('').toUpperCase()}
         </button>
         <div>
-          <p className="eyebrow">{isOwner ? 'Admin control' : 'Field work'}</p>
+          <p className="eyebrow">{isOwner ? 'Admin control' : 'User workspace'}</p>
           <h2>AquaCulture</h2>
         </div>
       </div>
       <nav className="nav-list" aria-label="Primary">
         {navItems.map(({ id, label, icon: Icon }) => (
-          <button key={id} className={activeNav === id ? 'nav-item active' : 'nav-item'} onClick={() => { setActiveNav(id); if (window.innerWidth <= 1120) setSidebarOpen(false); }}>
+          <button
+            key={id}
+            type="button"
+            className={activeNav === id ? 'nav-item active' : 'nav-item'}
+            aria-current={activeNav === id ? 'page' : undefined}
+            onClick={() => navigateToSection(id)}
+          >
             <Icon size={18} />{label}
           </button>
         ))}
@@ -3229,7 +3327,7 @@ function App() {
       <div className="sync-card">
           <CheckCircle2 size={19} />
           <div>
-            <strong>{isOwner ? 'Admin permissions' : 'Worker permissions'}</strong>
+            <strong>{isOwner ? 'Admin permissions' : 'User permissions'}</strong>
             <span>{isOwner ? 'Can create ponds, finance records, and tasks' : 'Assigned ponds only. No pond creation.'}</span>
           </div>
         </div>
@@ -3376,11 +3474,61 @@ function App() {
       ) : null}
 
       <main className="workspace">
+        {isOwner && showPondCreateModal && activeNav === 'ponds' ? (
+          <div className="modal-backdrop" onClick={() => setShowPondCreateModal(false)}>
+            <div className="modal worker-modal pond-form-compact" onClick={(event) => event.stopPropagation()}>
+              <h3>Register pond</h3>
+              <form className="worker-create-form" onSubmit={handleCreatePond}>
+                <label className="worker-field">
+                  <span>Pond number</span>
+                  <input value={`Auto: POND-${String(Math.max(0, ...data.ponds.map((pond) => Number(pond.number) || 0)) + 1).padStart(3, '0')}`} disabled readOnly />
+                </label>
+                <label className="worker-field">
+                  <span>Fish Stock Name / Species</span>
+                  <select value={newPond.species} onChange={(event) => setNewPond({ ...newPond, species: event.target.value })} required>
+                    <option value="TILAPIA">Tilapia</option><option value="CATFISH">Catfish</option><option value="TROUT">Trout</option><option value="SHRIMP">Shrimp</option><option value="OTHER">Other</option>
+                  </select>
+                </label>
+                <label className="worker-field">
+                  <span>Initial Stock (fish)</span>
+                  <input type="number" min="1" step="1" value={newPond.initialPopulation} onChange={(event) => setNewPond({ ...newPond, initialPopulation: event.target.value })} required />
+                </label>
+                <label className="worker-field">
+                  <span>Target Harvest Weight (g)</span>
+                  <input type="number" min="1" step="1" value={newPond.targetHarvestKg} onChange={(event) => setNewPond({ ...newPond, targetHarvestKg: event.target.value })} placeholder="200" required />
+                </label>
+                <label className="worker-field">
+                  <span>Current Feed Size</span>
+                  <select value={newPond.feedSize} onChange={(event) => setNewPond({ ...newPond, feedSize: event.target.value })} required>
+                    {['1mm', '1.5mm', '2mm', '2.5mm', '3mm', '3.5mm', '4mm', '4.5mm'].map((size) => <option key={size} value={size}>{size}</option>)}
+                  </select>
+                </label>
+                <label className="worker-field">
+                  <span>Target Harvest Date</span>
+                  <input type="date" value={newPond.targetHarvestDate} onChange={(event) => setNewPond({ ...newPond, targetHarvestDate: event.target.value })} />
+                </label>
+                <label className="worker-field full-width">
+                  <span>User Assigned</span>
+                  <select value={newPond.assignedUserId} onChange={(event) => setNewPond({ ...newPond, assignedUserId: event.target.value })}>
+                    <option value="all">Select a user</option>
+                    {workerRoster.filter((worker) => String(worker.role?.name || worker.role || 'WORKER').toUpperCase() === 'WORKER').map((worker) => <option key={worker.id} value={worker.id}>{worker.name || worker.email}</option>)}
+                  </select>
+                </label>
+                <div className="worker-form-footer full-width">
+                  <div className="modal-actions compact-actions">
+                    <button type="button" className="secondary-btn" onClick={() => setShowPondCreateModal(false)}>Cancel</button>
+                    <button className="primary-btn" type="submit" disabled={pondCreateSubmitting}>{pondCreateSubmitting ? 'Registering...' : 'Create pond'}</button>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </div>
+        ) : null}
         <header className="topbar">
           <div className="topbar-left">
             <div>
               <p className="eyebrow">Good evening {currentUser?.name || 'Team Member'}</p>
-              <h1>{navItems.find((item) => item.id === activeNav)?.label}</h1>
+              <h1>{navItems.find((item) => item.id === activeNav)?.label || ''}</h1>
             </div>
           </div>
           <div className="topbar-actions">
@@ -3604,7 +3752,18 @@ function App() {
           </>
         ) : null}
 
-        {activeNav === 'reports' ? (
+        {activeNav === 'reports' && (isOwner || currentUser?.role === 'WORKER') ? (
+          <AdminReports
+            data={data}
+            users={[...workerRoster, ...(currentUser ? [currentUser] : [])]}
+            loading={reportDataLoading}
+            error={reportDataError}
+            isAdmin={isOwner}
+            currentUser={currentUser}
+          />
+        ) : null}
+
+        {activeNav === 'legacy-reports' ? (
           <section className="reports-shell">
             <div className="report-header reveal-card">
               <div>
@@ -3738,6 +3897,43 @@ function App() {
                   ) : null}
                 </div>
  
+                <Panel eyebrow="All-time pond reports" title="Complete pond update history" className="reveal-card report-panel pond-report-panel" style={{ marginTop: 18 }}>
+                  <div className="report-panel-toolbar">
+                    <div>
+                      <strong>Filter pond history</strong>
+                      <span>View updates for one pond or all ponds.</span>
+                    </div>
+                    <label className="report-filter-field">
+                      <span>Pond</span>
+                      <select value={reportPondFilter} onChange={(event) => setReportPondFilter(event.target.value)}>
+                        <option value="ALL">All ponds</option>
+                        {data.ponds.map((pond) => <option key={pond.id} value={pond.id}>Pond {pond.number}</option>)}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="table-scroll">
+                    <table className="pond-update-history-table pond-report-table">
+                      <thead>
+                        <tr>
+                          <th>Date / time</th><th>Pond</th><th>Feed size</th><th>Feed</th><th>Appetite</th><th>Behavior</th>
+                          <th>pH</th><th>Ammonia</th><th>Mortality</th><th>Cause</th><th>Avg weight</th><th>Note</th><th>Recorded by</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pondUpdateReportRows.length === 0 ? (
+                          <tr><td colSpan={13}>No pond updates recorded yet.</td></tr>
+                        ) : pondUpdateReportRows.map((row) => (
+                          <tr key={row.id}>
+                            <td>{row.date ? new Date(row.date).toLocaleString() : '—'}</td><td>{row.pond}</td><td>{row.feedSize}</td><td>{row.feed}</td>
+                            <td>{row.appetite}</td><td>{row.behavior}</td><td>{row.ph}</td><td>{row.ammonia}</td><td>{row.mortality}</td>
+                            <td>{row.cause}</td><td>{row.weight}</td><td>{row.note}</td><td>{row.recorder}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </Panel>
+
                 <div className="report-grid" style={{ marginTop: 18 }}>
                   {allWorkersReportSummaries.map((workerSummary, index) => (
                     <Panel key={workerSummary.id || workerSummary.name} eyebrow="Worker report" title={workerSummary.name} className="reveal-card report-panel" style={{ animationDelay: `${220 + index * 40}ms` }}>
@@ -3862,12 +4058,52 @@ function App() {
                     </div>
                   </Panel>
                 </div>
+                <Panel eyebrow="All-time pond reports" title="Complete pond update history" className="reveal-card report-panel pond-report-panel" style={{ marginTop: 18 }}>
+                  <div className="report-panel-toolbar">
+                    <div>
+                      <strong>Filter pond history</strong>
+                      <span>View updates for one pond or all ponds.</span>
+                    </div>
+                    <label className="report-filter-field">
+                      <span>Pond</span>
+                      <select value={reportPondFilter} onChange={(event) => setReportPondFilter(event.target.value)}>
+                        <option value="ALL">All ponds</option>
+                        {data.ponds.map((pond) => <option key={pond.id} value={pond.id}>Pond {pond.number}</option>)}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="table-scroll">
+                    <table className="pond-update-history-table pond-report-table">
+                      <thead><tr><th>Date / time</th><th>Pond</th><th>Feed size</th><th>Feed</th><th>Appetite</th><th>Behavior</th><th>pH</th><th>Ammonia</th><th>Mortality</th><th>Cause</th><th>Avg weight</th><th>Note</th><th>Recorded by</th></tr></thead>
+                      <tbody>
+                        {pondUpdateReportRows.length === 0 ? <tr><td colSpan={13}>No pond updates recorded yet.</td></tr> : pondUpdateReportRows.map((row) => (
+                          <tr key={row.id}><td>{row.date ? new Date(row.date).toLocaleString() : '—'}</td><td>{row.pond}</td><td>{row.feedSize}</td><td>{row.feed}</td><td>{row.appetite}</td><td>{row.behavior}</td><td>{row.ph}</td><td>{row.ammonia}</td><td>{row.mortality}</td><td>{row.cause}</td><td>{row.weight}</td><td>{row.note}</td><td>{row.recorder}</td></tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </Panel>
               </>
             )}
 
             {isOwner ? (
               <Panel eyebrow="Long-form ledger" title="Permanent report records" className="reveal-card report-table-panel" style={{ animationDelay: '250ms' }}>
-                <div className="report-table-wrapper">
+              <div className="report-panel-toolbar">
+                <div>
+                  <strong>Filter finance report</strong>
+                  <span>Choose the ledger category to review.</span>
+                </div>
+                <label className="report-filter-field">
+                  <span>Finance type</span>
+                  <select value={reportFinanceFilter} onChange={(event) => setReportFinanceFilter(event.target.value as typeof reportFinanceFilter)}>
+                    <option value="ALL">All finance</option>
+                    <option value="RUNNING_COST">Running Cost</option>
+                    <option value="FIXED_COST">Fixed Cost</option>
+                    <option value="SALES">Sales</option>
+                  </select>
+                </label>
+              </div>
+              <div className="report-table-wrapper">
                   <table className="report-table">
                     <thead>
                       <tr>
@@ -3936,98 +4172,35 @@ function App() {
         ) : null}
 
         {activeNav === 'ponds' ? (
-          <section className="dashboard-grid wide-left">
+          <PondRegistryTable
+            ponds={visiblePonds}
+            feedings={data.feedings}
+            mortalities={data.mortalityLogs}
+            harvests={data.harvests}
+            isAdmin={isOwner}
+            loading={reportDataLoading}
+            error={reportDataError}
+            onAddPond={() => setShowPondCreateModal(true)}
+            onQuickAction={(action: PondQuickAction) => {
+              const pondId = selectedPondId || visiblePonds[0]?.id || '';
+              setAdminPondQuickUpdateId(pondId);
+              if (action === 'update') {
+                setQuickPondUpdateOpen(true);
+              } else {
+                setAdminActionModal({ type: action });
+                if (action === 'targetHarvest') setTargetHarvestAction((current) => ({ ...current, pondId: current.pondId || pondId }));
+                if (action === 'harvestQuantity') setHarvestQuantityAction((current) => ({ ...current, pondId: current.pondId || pondId }));
+                if (action === 'recommendFeed') setRecommendFeedAction((current) => ({ ...current, pondId: current.pondId || pondId }));
+                if (action === 'mortality') setMortalityAction((current) => ({ ...current, pondId: current.pondId || pondId }));
+              }
+            }}
+            onViewDetails={(pondId) => { void openPond(pondId); }}
+          />
+        ) : null}
+
+        {activeNav === 'ponds' && (quickPondUpdateOpen || adminActionModal) ? (
+          <section className="pond-tools-modal-host">
             <Panel eyebrow={isOwner ? 'Admin pond management' : 'Assigned ponds'} title="Pond registry">
-              {isOwner ? (
-                <>
-                  <div className="worker-toolbar" style={{ marginBottom: 16 }}>
-                    <button type="button" className="primary-btn" onClick={() => setShowPondCreateModal(true)}>
-                      <Plus size={16} />Add pond
-                    </button>
-                  </div>
-
-                  {showPondCreateModal ? (
-                    <div className="modal-backdrop" onClick={() => setShowPondCreateModal(false)}>
-                      <div className="modal worker-modal pond-form-compact" onClick={(event) => event.stopPropagation()}>
-                        <h3>New pond profile</h3>
-                        <form className="worker-create-form" onSubmit={handleCreatePond}>
-                          <label className="worker-field full-width">
-                            <span>Site name</span>
-                            <input value={newPond.siteName} onChange={(event) => setNewPond({ ...newPond, siteName: event.target.value })} placeholder="North Lagoon" required />
-                          </label>
-
-                          <label className="worker-field">
-                            <span>Pond number</span>
-                            <input value={newPond.number} onChange={(event) => setNewPond({ ...newPond, number: event.target.value })} placeholder="1" required />
-                          </label>
-
-                          <label className="worker-field">
-                            <span>Species</span>
-                            <select value={newPond.species} onChange={(event) => setNewPond({ ...newPond, species: event.target.value })} required>
-                              <option value="TILAPIA">Tilapia</option>
-                              <option value="CATFISH">Catfish</option>
-                              <option value="TROUT">Trout</option>
-                              <option value="SHRIMP">Shrimp</option>
-                              <option value="OTHER">Other</option>
-                            </select>
-                          </label>
-
-                          <label className="worker-field">
-                            <span>Water volume (litres)</span>
-                            <input type="number" min="1" step="1" value={newPond.capacity} onChange={(event) => setNewPond({ ...newPond, capacity: event.target.value })} placeholder="5000" required />
-                          </label>
-
-                          <label className="worker-field">
-                            <span>Initial stock fish</span>
-                            <input type="number" min="1" step="1" value={newPond.initialPopulation} onChange={(event) => setNewPond({ ...newPond, initialPopulation: event.target.value })} placeholder="400" required />
-                          </label>
-
-                          <label className="worker-field">
-                            <span>Stocked on</span>
-                            <input type="date" value={newPond.stockedAt} onChange={(event) => setNewPond({ ...newPond, stockedAt: event.target.value })} required />
-                          </label>
-
-                          <label className="worker-field">
-                            <span>Initial avg weight (g)</span>
-                            <input type="number" min="0" step="0.01" value={newPond.initialAvgWeightG} onChange={(event) => setNewPond({ ...newPond, initialAvgWeightG: event.target.value })} placeholder="0.01" required />
-                          </label>
-
-                          <div className="inline-fields">
-                            <label className="worker-field">
-                              <span>Assign worker</span>
-                              <select value={newPond.assignedUserId} onChange={(event) => setNewPond({ ...newPond, assignedUserId: event.target.value })}>
-                                <option value="all">All workers</option>
-                                {workers.filter((worker) => worker.role?.name === 'WORKER' || worker.role === 'WORKER').map((worker) => (
-                                  <option key={worker.id} value={worker.id}>{worker.name || worker.email}</option>
-                                ))}
-                              </select>
-                            </label>
-
-                            <label className="worker-field">
-                              <span>Target harvest weight</span>
-                              <div className="unit-field compact-unit-field">
-                                <input type="number" min="1" step="1" value={newPond.targetHarvestKg} onChange={(event) => setNewPond({ ...newPond, targetHarvestKg: event.target.value })} placeholder="200" required />
-                                <select value={newPond.targetHarvestUnit} onChange={(event) => setNewPond({ ...newPond, targetHarvestUnit: event.target.value as 'g' | 'kg' })}>
-                                  <option value="g">g</option>
-                                  <option value="kg">kg</option>
-                                </select>
-                              </div>
-                            </label>
-                          </div>
-
-                          <div className="worker-form-footer full-width">
-                            <small className="helper-text helper-note">Create a pond and it will appear in the registry immediately.</small>
-                            <div className="modal-actions compact-actions">
-                              <button type="button" className="secondary-btn" onClick={() => setShowPondCreateModal(false)}>Cancel</button>
-                              <button className="primary-btn" type="submit">Create pond</button>
-                            </div>
-                          </div>
-                        </form>
-                      </div>
-                    </div>
-                  ) : null}
-                </>
-              ) : null}
               <div className="pond-grid">
                 {visiblePonds.map((pond) => (
                   <div
@@ -4134,11 +4307,10 @@ function App() {
                         setToastMessage('Choose a pond first');
                         return;
                       }
-                      setSelectedPondId(adminPondQuickUpdateId);
-                      setQuickPondUpdateOpen(false);
-                      await openPond(adminPondQuickUpdateId);
-                      setActiveNav('ponds');
                       await submitPondUpdateForPond(adminPondQuickUpdateId);
+                      setSelectedPondId(adminPondQuickUpdateId);
+                      await openPond(adminPondQuickUpdateId);
+                      setQuickPondUpdateOpen(false);
                     }}
                   >
                     <label className="worker-field full-width">
@@ -4151,54 +4323,26 @@ function App() {
                       </select>
                     </label>
 
-                    <div className="quick-update-form-grid">
-                      <select
-                        value={pondLogForm.feedSize || (getAvailableFeedSizes()[0] || '')}
-                        onChange={(event) => setPondLogForm((current) => ({ ...current, feedSize: event.target.value }))}
-                        disabled={getAvailableFeedSizes().length === 0}
-                      >
-                        {getAvailableFeedSizes().length === 0 ? (
-                          <option value="">No feed in stock</option>
-                        ) : (
-                          getAvailableFeedSizes().map((size) => (
-                            <option key={size} value={size}>{size}</option>
-                          ))
-                        )}
-                      </select>
-
-                      <select value={pondLogForm.inventoryItemId || ''} onChange={(event) => setPondLogForm((current) => ({ ...current, inventoryItemId: event.target.value }))}>
-                        <option value="">Feed stock item (optional)</option>
-                        {data.inventoryItems.filter((item) => {
-                          const category = String(item.category || '').toUpperCase();
-                          const name = String(item.name || '').toLowerCase();
-                          return (category === 'FEED' || name.includes('feed')) && Number(item.currentStock || 0) > 0;
-                        }).map((item) => (
-                          <option key={item.id} value={item.id}>{item.name}</option>
-                        ))}
-                      </select>
-
-                      <input type="number" min="0" step="10" placeholder="Feed grams" value={pondLogForm.feedGrams} onChange={(event) => setPondLogForm((current) => ({ ...current, feedGrams: event.target.value, feedKg: event.target.value ? (Number(event.target.value) / 1000).toFixed(3) : '' }))} />
-
-                      <select value={pondLogForm.appetite} onChange={(event) => setPondLogForm((current) => ({ ...current, appetite: event.target.value }))}>
-                        <option value="5">Appetite 5 - excellent</option>
-                        <option value="4">Appetite 4 - good</option>
-                        <option value="3">Appetite 3 - fair</option>
-                        <option value="2">Appetite 2 - poor</option>
-                        <option value="1">Appetite 1 - very poor</option>
-                      </select>
-
-                      <input placeholder="Normal" value={pondLogForm.behavior} onChange={(event) => setPondLogForm((current) => ({ ...current, behavior: event.target.value }))} />
-                      <input placeholder="pH" value={pondLogForm.ph} onChange={(event) => setPondLogForm((current) => ({ ...current, ph: event.target.value }))} />
-                      <input placeholder="Dissolved oxygen" value={pondLogForm.dissolvedO2} onChange={(event) => setPondLogForm((current) => ({ ...current, dissolvedO2: event.target.value }))} />
-                      <input placeholder="Ammonia" value={pondLogForm.ammonia} onChange={(event) => setPondLogForm((current) => ({ ...current, ammonia: event.target.value }))} />
-                      <input placeholder="Water added %" value={pondLogForm.waterAddedPercent} onChange={(event) => setPondLogForm((current) => ({ ...current, waterAddedPercent: event.target.value }))} />
-                      <input placeholder="Water removed %" value={pondLogForm.waterRemovedPercent} onChange={(event) => setPondLogForm((current) => ({ ...current, waterRemovedPercent: event.target.value }))} />
-                      <input placeholder="0" value={pondLogForm.mortality} onChange={(event) => setPondLogForm((current) => ({ ...current, mortality: event.target.value }))} />
-                      <input placeholder="Mortality cause" value={pondLogForm.mortalityCause} onChange={(event) => setPondLogForm((current) => ({ ...current, mortalityCause: event.target.value }))} />
-                      <input type="number" min="0" step="1" placeholder="Average weight (g)" value={pondLogForm.avgWeightGrams} onChange={(event) => setPondLogForm((current) => ({ ...current, avgWeightGrams: event.target.value }))} />
-                      <input placeholder="Growth note" value={pondLogForm.growthComment} onChange={(event) => setPondLogForm((current) => ({ ...current, growthComment: event.target.value }))} />
-                      <textarea placeholder="Water or behavior note" value={pondLogForm.waterComment} onChange={(event) => setPondLogForm((current) => ({ ...current, waterComment: event.target.value }))} />
-                    </div>
+                    <table className="pond-update-form-table">
+                      <thead><tr><th>Variable name</th><th>Actions / inputs</th></tr></thead>
+                      <tbody>
+                        <tr><td>Pond number</td><td><select value={adminPondQuickUpdateId} onChange={(event) => setAdminPondQuickUpdateId(event.target.value)} required><option value="">Choose a pond</option>{visiblePonds.map((pond) => <option key={pond.id} value={pond.id}>Pond {pond.number}</option>)}</select></td></tr>
+                        <tr><td>Select feed stock item</td><td><select value={pondLogForm.inventoryItemId} onChange={(event) => {
+                          const selectedItem = getAvailableFeedInventoryItems().find((item) => item.id === event.target.value);
+                          setPondLogForm((current) => ({ ...current, inventoryItemId: event.target.value, feedSize: selectedItem ? getFeedSizeFromInventoryItem(selectedItem) || current.feedSize : current.feedSize }));
+                        }} required><option value="">Select feed stock item</option>{getAvailableFeedInventoryItems().map((item) => <option key={item.id} value={item.id}>{item.name} ({item.currentStock} {item.unit || 'kg'})</option>)}</select></td></tr>
+                        <tr><td>Feed size</td><td><select value={pondLogForm.feedSize || (getAvailableFeedSizes()[0] || '')} onChange={(event) => setPondLogForm((current) => ({ ...current, feedSize: event.target.value }))} required><option value="">Select feed size</option>{getAvailableFeedSizes().map((size) => <option key={size} value={size}>{size}</option>)}</select></td></tr>
+                        <tr><td>Feed amount (grams)</td><td><input type="number" min="0" step="10" value={pondLogForm.feedGrams} onChange={(event) => setPondLogForm((current) => ({ ...current, feedGrams: event.target.value, feedKg: event.target.value ? (Number(event.target.value) / 1000).toFixed(3) : '' }))} required /></td></tr>
+                        <tr><td>Appetite</td><td><select value={pondLogForm.appetite} onChange={(event) => setPondLogForm((current) => ({ ...current, appetite: event.target.value }))} required><option value="">Select appetite</option><option value="5">Excellent</option><option value="4">Good</option><option value="3">Fair</option><option value="2">Poor</option><option value="1">Very poor</option></select></td></tr>
+                        <tr><td>Behavior</td><td><select value={pondLogForm.behavior} onChange={(event) => setPondLogForm((current) => ({ ...current, behavior: event.target.value }))} required><option value="">Select behavior</option><option value="normal">Normal</option><option value="good">Good</option><option value="fair">Fair</option><option value="abnormal">Abnormal</option></select></td></tr>
+                        <tr><td>pH</td><td><select value={pondLogForm.ph} onChange={(event) => setPondLogForm((current) => ({ ...current, ph: event.target.value }))}><option value="">Select pH</option><option value="6">6.0</option><option value="7">7.0</option><option value="8">8.0</option></select></td></tr>
+                        <tr><td>Ammonia</td><td><input value={pondLogForm.ammonia} onChange={(event) => setPondLogForm((current) => ({ ...current, ammonia: event.target.value }))} /></td></tr>
+                        <tr><td>Mortality</td><td><input type="number" min="0" value={pondLogForm.mortality} onChange={(event) => setPondLogForm((current) => ({ ...current, mortality: event.target.value }))} /></td></tr>
+                        <tr><td>Mortality cause</td><td><input value={pondLogForm.mortalityCause} onChange={(event) => setPondLogForm((current) => ({ ...current, mortalityCause: event.target.value }))} /></td></tr>
+                        <tr><td>Average weight (g)</td><td><input type="number" min="0" step="0.1" value={pondLogForm.avgWeightGrams} onChange={(event) => setPondLogForm((current) => ({ ...current, avgWeightGrams: event.target.value }))} /></td></tr>
+                        <tr><td>Note</td><td><textarea value={pondLogForm.waterComment} onChange={(event) => setPondLogForm((current) => ({ ...current, waterComment: event.target.value }))} /></td></tr>
+                      </tbody>
+                    </table>
 
                     <div className="quick-update-actions">
                       <button type="button" className="secondary-btn" onClick={() => setQuickPondUpdateOpen(false)}>Cancel</button>
@@ -4420,10 +4564,6 @@ function App() {
                           <span>Mortality count</span>
                           <input type="number" min="1" step="1" value={mortalityAction.count} onChange={(event) => setMortalityAction({ ...mortalityAction, count: event.target.value })} required />
                         </label>
-                        <label className="worker-field">
-                          <span>Observed at</span>
-                          <input type="datetime-local" value={mortalityAction.observedAt ? new Date(mortalityAction.observedAt).toISOString().slice(0, 16) : ''} onChange={(event) => setMortalityAction({ ...mortalityAction, observedAt: event.target.value ? new Date(event.target.value).toISOString() : '' })} />
-                        </label>
                       </div>
                       <label className="worker-field full-width">
                         <span>Mortality cause</span>
@@ -4439,28 +4579,34 @@ function App() {
               </div>
             ) : null}
             {selectedPond && selectedPondSummary ? (
-              <div className="pond-modal-backdrop" onClick={() => { setSelectedPondId(null); setSelectedPond(null); setSelectedPondSummary(null); }}>
-                <div className="pond-modal-card" onClick={(event) => event.stopPropagation()}>
-                  <button type="button" className="pond-modal-close" aria-label="Close pond details" onClick={() => { setSelectedPondId(null); setSelectedPond(null); setSelectedPondSummary(null); }}>×</button>
-                  <PondSummaryPanel
-                    pond={selectedPond}
-                    summary={selectedPondSummary}
-                    isOwner={isOwner}
-                    form={pondLogForm}
-                    inventoryItems={data.inventoryItems}
-                    lastSubmittedPondUpdate={lastSubmittedPondUpdate}
-                    onFormChange={setPondLogForm}
-                    onSubmit={handleWorkerPondLogEnhanced}
-                    onRecordHarvest={(harvest: any) => { setLastCreatedHarvest({ id: harvest.id, pondId: harvest.pondId, numberHarvested: harvest.numberHarvested }); setToastMessage(`${harvest.numberHarvested} fish recorded — Undo`); }}
-                    onApplyRecommendedFeed={handleApplyRecommendedFeed}
-                    onUpdateHarvest={handleUpdateHarvest}
-                    token={token}
-                    apiBaseUrl={apiBaseUrl}
-                    loadData={loadData}
-                    refreshDashboard={refreshDashboard}
-                    setToastMessage={setToastMessage}
-                  />
-                </div>
+              <div className="pond-details-inline">
+                <button
+                  type="button"
+                  className="secondary-btn pond-details-close"
+                  onClick={() => { setSelectedPondId(null); setSelectedPond(null); setSelectedPondSummary(null); }}
+                >
+                  Close pond details
+                </button>
+                <PondSummaryPanel
+                  pond={selectedPond}
+                  summary={selectedPondSummary}
+                  isOwner={isOwner}
+                  form={pondLogForm}
+                  availablePonds={visiblePonds}
+                  onPondChange={(pondId: string) => { setSelectedPondId(pondId); void openPond(pondId); }}
+                  inventoryItems={data.inventoryItems}
+                  lastSubmittedPondUpdate={lastSubmittedPondUpdate}
+                  onFormChange={setPondLogForm}
+                  onSubmit={handleWorkerPondLogEnhanced}
+                  onRecordHarvest={(harvest: any) => { setLastCreatedHarvest({ id: harvest.id, pondId: harvest.pondId, numberHarvested: harvest.numberHarvested }); setToastMessage(`${harvest.numberHarvested} fish recorded — Undo`); }}
+                  onApplyRecommendedFeed={handleApplyRecommendedFeed}
+                  onUpdateHarvest={handleUpdateHarvest}
+                  token={token}
+                  apiBaseUrl={apiBaseUrl}
+                  loadData={loadData}
+                  refreshDashboard={refreshDashboard}
+                  setToastMessage={setToastMessage}
+                />
               </div>
             ) : null}
 
@@ -4504,7 +4650,7 @@ function App() {
                   <select value={taskForm.priority} onChange={(event) => setTaskForm({ ...taskForm, priority: event.target.value })}>
                     <option value="LOW">Low</option><option value="MEDIUM">Medium</option><option value="HIGH">High</option><option value="URGENT">Urgent</option>
                   </select>
-                  <input type="datetime-local" value={taskForm.dueAt} onChange={(event) => setTaskForm({ ...taskForm, dueAt: event.target.value })} />
+                  <label className="worker-field"><span>Due date and time (optional)</span><input type="datetime-local" value={taskForm.dueAt} onChange={(event) => setTaskForm({ ...taskForm, dueAt: event.target.value })} /><small>Task sent date and time are recorded automatically.</small></label>
                   <button className="primary-btn" type="submit"><Send size={16} />Send task</button>
                 </form>
               </Panel>
@@ -4531,7 +4677,9 @@ function App() {
                   <div className="record-row"><strong>Assigned to</strong><span>{selectedTask.assignees?.map((a: any) => a.user?.name).join(', ') || 'Unassigned'}</span></div>
                   <div className="record-row"><strong>Status</strong><span>{titleCase(selectedTask.status || 'OPEN')}</span></div>
                   <div className="record-row"><strong>Priority</strong><span>{titleCase(selectedTask.priority || 'MEDIUM')}</span></div>
+                  <div className="record-row"><strong>Sent</strong><span>{selectedTask.createdAt ? new Date(selectedTask.createdAt).toLocaleString() : '—'}</span></div>
                   <div className="record-row"><strong>Due</strong><span>{selectedTask.dueAt ? new Date(selectedTask.dueAt).toLocaleString() : 'No deadline'}</span></div>
+                  {selectedTask.completedAt ? <div className="record-row"><strong>Completed</strong><span>{new Date(selectedTask.completedAt).toLocaleString()}</span></div> : null}
                 </div>
               ) : (
                 <p className="empty-copy">Select a task to inspect the details.</p>
@@ -4855,7 +5003,16 @@ function App() {
 
             <section className="finance-section">
               <Panel eyebrow="Finance ledger" title="Finance ledger records" className="finance-worksheet-panel">
-                <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 12, gap: 12 }}>
+                <div className="finance-ledger-toolbar">
+                  <label>
+                    Filter ledger
+                    <select value={financeLedgerFilter} onChange={(event) => setFinanceLedgerFilter(event.target.value as typeof financeLedgerFilter)}>
+                      <option value="ALL">All records</option>
+                      <option value="RUNNING_COST">Running Cost</option>
+                      <option value="FIXED_COST">Fixed Cost</option>
+                      <option value="SALES">Sales</option>
+                    </select>
+                  </label>
                   <button type="button" className="primary-btn" onClick={() => setShowFinanceForm((current) => !current)} style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Plus size={16} />{showFinanceForm ? 'Close' : 'Add row'}</button>
                 </div>
 
@@ -4895,7 +5052,7 @@ function App() {
                 ) : null}
 
                 <FinanceTable
-                  records={data.financeRecords}
+                  records={financeLedgerRecords}
                   onDelete={(id) => showDeleteConfirmation('finance', id, `Finance record ${id}`)}
                   revealedId={revealedSwipeAction && revealedSwipeAction.type === 'finance' ? revealedSwipeAction.id : null}
                   onRevealStart={(id, event) => beginSwipeReveal('finance', id, event)}
@@ -5247,6 +5404,8 @@ function PondSummaryPanel({
   isOwner,
   form,
   inventoryItems,
+  availablePonds,
+  onPondChange,
   lastSubmittedPondUpdate,
   onFormChange,
   onSubmit,
@@ -5286,6 +5445,8 @@ function PondSummaryPanel({
     harvestDestination: string;
   };
   inventoryItems: any[];
+  availablePonds: any[];
+  onPondChange: (pondId: string) => void;
   lastSubmittedPondUpdate: Record<string, { id: string; title: string; detail: string; date: string; worker: string; type: string }>;
   onFormChange: (form: any) => void;
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
@@ -5334,73 +5495,97 @@ function PondSummaryPanel({
   const currentFeedSize = summary.latestFeedSize || summary.recommendedFeedSize || '4mm';
   const recommendedFeedSize = pond.recommendedFeedSize || summary.recommendedFeedSize || getRecommendedFeedSize(typeof currentAvg === 'number' ? currentAvg : Number(pond.initialAvgWeightG ?? 0));
   const feedNeedsChange = currentFeedSize !== recommendedFeedSize;
-  const harvestDateValue = pond.targetHarvestDate ? new Date(pond.targetHarvestDate).toISOString().slice(0,10) : (summary.harvest ? new Date(summary.harvest.expectedHarvestDate).toISOString().slice(0,10) : '');
   const recentPondUpdates = useMemo(() => {
-    const entries: Array<{ id: string; title: string; detail: string; date: string; worker: string; type: string }> = [];
-    const fiveDaysAgo = Date.now() - (5 * 24 * 60 * 60 * 1000);
+    type PondUpdate = {
+      id: string;
+      date: number;
+      user: string;
+      sources: Set<string>;
+      values: Record<string, string>;
+    };
+    const entries: Array<{ id: string; date: number; user: string; source: string; values: Record<string, string> }> = [];
+    const addEntry = (source: any, kind: string, dateValue: string | Date | null | undefined, values: Record<string, string>, userName?: string | null) => {
+      if (!source || !dateValue) return;
+      const date = new Date(dateValue).getTime();
+      if (Number.isNaN(date)) return;
+      entries.push({
+        id: `${kind}-${source.id || date}`,
+        date,
+        user: userName || source.worker?.name || source.worker?.email || 'Unknown',
+        source: kind,
+        values,
+      });
+    };
+    const appetiteLabel = (value: number | null | undefined) => {
+      if (value == null) return '';
+      return ({ 5: 'Excellent', 4: 'Good', 3: 'Fair', 2: 'Poor', 1: 'Very poor' } as Record<number, string>)[value] || String(value);
+    };
+
+    (pond.feedLogs || []).forEach((log: any) => addEntry(log, 'feed', log.date, {
+      feedStock: log.feedType || '',
+      feedSize: log.feedSize || '',
+      feedAmount: log.quantityKg == null ? '' : `${Number(log.quantityKg) * 1000} g`,
+      appetite: appetiteLabel(log.appetite),
+      behavior: log.observation || '',
+    }));
+    (pond.waterLogs || []).forEach((log: any) => addEntry(log, 'water', log.measuredAt, {
+      ph: log.ph == null ? '' : String(log.ph),
+      ammonia: log.ammonia == null ? '' : String(log.ammonia),
+      note: log.comment || '',
+    }));
+    (pond.mortalityLogs || []).forEach((log: any) => addEntry(log, 'mortality', log.observedAt, {
+      mortality: log.numberDead == null ? '' : String(log.numberDead),
+      mortalityCause: log.possibleCause || '',
+    }));
+    (pond.growthMeasurements || []).forEach((log: any) => addEntry(log, 'growth', log.measuredAt, {
+      averageWeight: log.avgWeightGrams == null ? '' : String(log.avgWeightGrams),
+      note: log.comment || '',
+    }));
+    (pond.harvestLogs || []).forEach((log: any) => addEntry(log, 'harvest', log.recordedAt, {
+      averageWeight: log.avgWeightGrams == null ? '' : String(log.avgWeightGrams),
+      note: `${log.numberHarvested ?? 0} fish harvested${log.method ? ` • ${log.method}` : ''}${log.destination ? ` • ${log.destination}` : ''}`,
+    }));
+    (pond.auditLogs || []).forEach((log: any) => {
+      const fields = Array.isArray(log.meta?.fields) ? log.meta.fields : [];
+      const fieldLabels = fields.map((field: string) => titleCase(field.replace(/([A-Z])/g, ' $1'))).join(', ');
+      addEntry(log, 'settings', log.createdAt, {
+        note: fieldLabels ? `Pond details updated: ${fieldLabels}` : 'Pond details updated',
+      }, log.user?.name || log.user?.email || 'Unknown');
+    });
 
     const localEntry = lastSubmittedPondUpdate[pond.id];
     if (localEntry) {
-      const localDateMs = new Date(localEntry.date).getTime();
-      if (!Number.isNaN(localDateMs) && localDateMs >= fiveDaysAgo) {
-        entries.push(localEntry);
+      const localDate = new Date(localEntry.date).getTime();
+      if (!Number.isNaN(localDate) && !entries.some((entry) => Math.abs(entry.date - localDate) <= 120000)) {
+        entries.push({
+          id: localEntry.id,
+          date: localDate,
+          user: localEntry.worker,
+          source: 'local',
+          values: { note: `${localEntry.title}${localEntry.detail ? ` • ${localEntry.detail}` : ''}` },
+        });
       }
     }
 
-    const addEntry = (source: any, type: string, title: string, dateValue?: string | Date | null, workerName?: string | null, extraDetail?: string) => {
-      if (!source) return;
-      const date = source.date || source.recordedAt || source.observedAt || source.measuredAt || dateValue;
-      const worker = workerName || source.worker?.name || source.worker?.email || 'Worker';
-      if (!date) return;
-      const dateMs = new Date(date).getTime();
-      if (Number.isNaN(dateMs) || dateMs < fiveDaysAgo) return;
-      entries.push({
-        id: `${type}-${source.id || Math.random().toString(16).slice(2)}`,
-        title,
-        detail: extraDetail || `by ${worker}`,
-        date: new Date(date).toISOString(),
-        worker,
-        type,
-      });
-    };
-
-    (pond.feedLogs || []).forEach((log: any) => addEntry(
-      log,
-      'Feed',
-      `${log.quantityKg ?? 0} kg fed`,
-      log.date,
-      log.worker?.name || log.worker?.email,
-      `${log.feedSize || 'Feed'} size • ${log.feedType || 'pellet'} • ${log.quantityKg ?? 0} kg`
-    ));
-    (pond.mortalityLogs || []).forEach((log: any) => addEntry(
-      log,
-      'Mortality',
-      `${log.numberDead ?? 0} fish lost`,
-      log.observedAt,
-      log.worker?.name || log.worker?.email,
-      `${log.possibleCause || 'Unspecified cause'} • ${log.numberDead ?? 0} fish`
-    ));
-    (pond.harvestLogs || []).forEach((log: any) => addEntry(
-      log,
-      'Harvest',
-      `${log.numberHarvested ?? 0} fish harvested`,
-      log.recordedAt,
-      log.worker?.name || log.worker?.email,
-      `${log.method || 'Manual'} harvest • ${log.numberHarvested ?? 0} fish`
-    ));
-    (pond.growthMeasurements || []).forEach((log: any) => addEntry(
-      log,
-      'Growth',
-      `Avg wt ${log.avgWeightGrams ?? 0} g`,
-      log.measuredAt,
-      log.worker?.name || log.worker?.email,
-      `Average weight ${log.avgWeightGrams ?? 0} g • ${log.growthComment || 'Growth check'}`
-    ));
-
-    return entries.sort((left, right) => new Date(right.date).getTime() - new Date(left.date).getTime()).slice(0, 5);
+    const grouped: PondUpdate[] = [];
+    entries.sort((left, right) => left.date - right.date).forEach((entry) => {
+      const match = [...grouped].reverse().find((row) =>
+        entry.date - row.date <= 120000
+        && !row.sources.has(entry.source)
+        && (row.user === entry.user || row.user === 'Unknown' || entry.user === 'Unknown')
+      );
+      if (match) {
+        match.date = Math.max(match.date, entry.date);
+        match.sources.add(entry.source);
+        match.values = { ...match.values, ...Object.fromEntries(Object.entries(entry.values).filter(([, value]) => value)) };
+        if (match.user === 'Unknown') match.user = entry.user;
+      } else {
+        grouped.push({ id: entry.id, date: entry.date, user: entry.user, sources: new Set([entry.source]), values: { ...entry.values } });
+      }
+    });
+    return grouped.sort((left, right) => right.date - left.date);
   }, [lastSubmittedPondUpdate, pond]);
 
-  const [targetDate, setTargetDate] = useState<string>(harvestDateValue);
   const [editingHarvestId, setEditingHarvestId] = useState<string | null>(null);
   const [harvestEditForm, setHarvestEditForm] = useState({
     numberHarvested: '',
@@ -5409,31 +5594,6 @@ function PondSummaryPanel({
     method: '',
     destination: '',
   });
-  useEffect(() => {
-    setTargetDate(harvestDateValue);
-  }, [pond.id, harvestDateValue]);
-
-  async function saveTargetDate(value: string | null) {
-    if (!token || !isOwner) return setToastMessage('Not authorized');
-    const body: any = {};
-    if (value) body.targetHarvestDate = new Date(value).toISOString();
-    else body.targetHarvestDate = null;
-    try {
-      const r = await fetch(`${apiBaseUrl}/ponds/${pond.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' }, body: JSON.stringify(body) });
-      if (r.ok) {
-        setToastMessage(value ? 'Target date set' : 'Target date cleared');
-        await refreshDashboard();
-      } else {
-        const bodyText = await r.text().catch(() => '');
-        let parsed;
-        try { parsed = JSON.parse(bodyText || '{}'); } catch { parsed = { error: bodyText || r.statusText }; }
-        setToastMessage(parsed.error || parsed.message || `Server error ${r.status}`);
-      }
-    } catch (e) {
-      setToastMessage('Error updating target date');
-    }
-  }
-
   return (
     <Panel eyebrow={`Pond ${pond.number}`} title={isOwner ? 'Admin inspection view' : 'Worker pond update'}>
       <div className="pond-detail-stack">
@@ -5445,100 +5605,125 @@ function PondSummaryPanel({
             </div>
             <Fish size={28} />
           </div>
-          <div className={`pond-detail ${!isOwner ? 'worker-large' : ''}`}>
-            <div><span>Initial stock</span><strong>{initialStock} fish</strong></div>
-            <div><span>Current live</span><strong>{summary.currentLive} fish</strong></div>
-            <div><span>Total mortality</span><strong>{summary.totalMortality} fish</strong></div>
-            <div><span>Total feed</span><strong>{summary.totalFeedKg ?? 0} kg</strong></div>
-            <div><span>Current Feed size</span><strong>{currentFeedSize}</strong></div>
-            <div><span>Current avg weight</span><strong>{typeof currentAvg === 'number' ? `${currentAvg} g` : currentAvg}</strong></div>
-            <div><span>Growth progress</span><strong>{growthProgress !== null ? `${growthProgress}%` : 'Missing data'}</strong></div>
-            <div><span>Target avg weight</span><strong>{targetAvg}</strong></div>
-            <div className={summary.harvest?.expectedHarvestDate ? 'target-date-highlight' : ''}>
-              <span>Target harvest date</span>
-              <strong>{summary.harvest?.expectedHarvestDate ? new Date(summary.harvest.expectedHarvestDate).toLocaleDateString() : 'Not planned'}</strong>
-              {summary.harvest?.expectedHarvestDate ? <small className="target-date-alert">Harvest scheduled</small> : null}
-            </div>
-            <div><span>Total harvested</span><strong>{summary.totalHarvested} fish</strong></div>
-            {isOwner ? (
-              <div className="target-date-row"><span>Update target date</span><div className="inline-update-actions"><input type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} /><button type="button" className="primary-btn" onClick={() => void saveTargetDate(targetDate)}>Set</button><button type="button" className="secondary-btn" onClick={() => { setTargetDate(''); void saveTargetDate(null); }}>Clear</button></div></div>
-            ) : null}
-          </div>
+          <table className="pond-summary-table">
+            <thead><tr><th>Variable Name</th><th>Update</th></tr></thead>
+            <tbody>
+              <tr><td>Pond Number</td><td>POND-{String(pond.number).padStart(3, '0')}</td></tr>
+              <tr><td>Date Registered</td><td>{pond.createdAt ? new Date(pond.createdAt).toLocaleDateString('en-GB') : '—'}</td></tr>
+              <tr><td>Initial Stock</td><td>{initialStock} fish</td></tr>
+              <tr><td>Current live</td><td><strong>{summary.currentLive} fish</strong></td></tr>
+              <tr><td>Total Mortality</td><td>{summary.totalMortality} fish</td></tr>
+              <tr><td>Total feed</td><td>{summary.totalFeedKg ?? 0} kg</td></tr>
+              <tr><td>Current Feed Size</td><td>{currentFeedSize}</td></tr>
+              <tr><td>Current avg weight</td><td>{typeof currentAvg === 'number' ? `${currentAvg} g` : currentAvg}</td></tr>
+              <tr><td>Target avg weight</td><td>{targetAvg}</td></tr>
+              <tr><td>Total harvest</td><td>{summary.totalHarvested} fish</td></tr>
+              <tr><td>Recommended Feed</td><td>{summary.recommendedFeedKg ?? 0} kg - {summary.recommendedFeedSize || recommendedFeedSize}</td></tr>
+              <tr><td>User Assigned</td><td>{pond.assignedUser?.name || pond.assignedUser?.email || 'Unassigned'}</td></tr>
+              <tr className={summary.harvest?.expectedHarvestDate ? 'target-date-highlight' : ''}>
+                <td>Target harvest date</td>
+                <td>
+                  {summary.harvest?.expectedHarvestDate ? new Date(summary.harvest.expectedHarvestDate).toLocaleDateString() : 'Not planned'}
+                  {summary.harvest?.expectedHarvestDate ? <small className="target-date-alert">Harvest scheduled</small> : null}
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
 
-        {isOwner && recentPondUpdates.length > 0 ? (
-          <div className="pond-detail-card">
+        <div className="pond-detail-card">
             <div className="detail-card-header">
               <div>
-                <span className="eyebrow">Recent worker activity</span>
-                <h3>Pond updates</h3>
+                <span className="eyebrow">Pond activity</span>
+                <h3>All updates</h3>
               </div>
             </div>
-            <div className="recent-update-list">
-              {recentPondUpdates.map((update) => (
-                <div key={update.id} className="recent-update-item">
-                  <div className="recent-update-copy">
-                    <strong>{update.title}</strong>
-                    <span>{update.detail}</span>
-                    <small>Worker: {update.worker}</small>
-                  </div>
-                  <small>{new Date(update.date).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</small>
-                </div>
-              ))}
-            </div>
+            {recentPondUpdates.length > 0 ? (
+              <div className="pond-update-history-wrap">
+                <table className="pond-update-history-table">
+                  <thead>
+                    <tr>
+                      <th>Pond number</th>
+                      <th>Feed stock in inventory</th>
+                      <th>Select feed stock item</th>
+                      <th>Feed size</th>
+                      <th>Feed amount (grams)</th>
+                      <th>Appetite</th>
+                      <th>Behavior</th>
+                      <th>pH</th>
+                      <th>Ammonia</th>
+                      <th>Mortality</th>
+                      <th>Mortality cause</th>
+                      <th>Average weight (g)</th>
+                      <th>Note</th>
+                      <th>Date</th>
+                      <th>User</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recentPondUpdates.map((update) => {
+                      const selectedFeed = inventoryItems.find((item) => String(item.name || '').toLowerCase() === String(update.values.feedStock || '').toLowerCase());
+                      const display = (value?: string) => value || '—';
+                      return (
+                        <tr key={update.id}>
+                          <td>{pond.number}</td>
+                          <td>{selectedFeed ? `${selectedFeed.currentStock ?? 0} ${selectedFeed.unit || 'kg'}` : '—'}</td>
+                          <td>{display(update.values.feedStock)}</td>
+                          <td>{display(update.values.feedSize)}</td>
+                          <td>{display(update.values.feedAmount?.replace(/\.0+ g$/, ' g'))}</td>
+                          <td>{display(update.values.appetite)}</td>
+                          <td>{display(update.values.behavior)}</td>
+                          <td>{display(update.values.ph)}</td>
+                          <td>{display(update.values.ammonia)}</td>
+                          <td>{display(update.values.mortality)}</td>
+                          <td>{display(update.values.mortalityCause)}</td>
+                          <td>{display(update.values.averageWeight)}</td>
+                          <td>{display(update.values.note)}</td>
+                          <td>{new Date(update.date).toLocaleString()}</td>
+                          <td>{update.user}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : <p className="empty-copy">No updates have been recorded for this pond yet.</p>}
           </div>
-        ) : null}
 
       </div>
 
-        {!isOwner ? (
-          <form className="worker-log-form" onSubmit={onSubmit}>
-          <select
-            value={form.feedSize || (availableFeedSizes[0] || '')}
-            onChange={(event) => onFormChange({ ...form, feedSize: event.target.value })}
-            disabled={availableFeedSizes.length === 0}
-          >
-            {availableFeedSizes.length === 0 ? (
-              <option value="">No feed in stock</option>
-            ) : (
-              availableFeedSizes.map((size) => (
-                <option key={size} value={size}>{size}</option>
-              ))
-            )}
-          </select>
-          <select value={form.inventoryItemId || ''} onChange={(event) => onFormChange({ ...form, inventoryItemId: event.target.value })}>
-            <option value="">Feed stock item (optional)</option>
-            {inventoryItems.filter((item) => {
-              const category = String(item.category || '').toUpperCase();
-              const name = String(item.name || '').toLowerCase();
-              return (category === 'FEED' || name.includes('feed')) && Number(item.currentStock || 0) > 0;
-            }).map((item) => (
-              <option key={item.id} value={item.id}>{item.name} ({formatTwoDecimalPlaces(Number(item.currentStock ?? 0))} {item.unit || 'kg'})</option>
-            ))}
-          </select>
-          <input type="number" min="0" step="10" placeholder="Feed grams" value={form.feedGrams} onChange={(event) => onFormChange({ ...form, feedGrams: event.target.value, feedKg: event.target.value ? (Number(event.target.value) / 1000).toFixed(3) : '' })} />
-          <select value={form.appetite} onChange={(event) => onFormChange({ ...form, appetite: event.target.value })}>
-            <option value="5">Appetite 5 - excellent</option>
-            <option value="4">Appetite 4 - good</option>
-            <option value="3">Appetite 3 - fair</option>
-            <option value="2">Appetite 2 - poor</option>
-            <option value="1">Appetite 1 - very poor</option>
-          </select>
-          <input placeholder="Fish behavior" value={form.behavior} onChange={(event) => onFormChange({ ...form, behavior: event.target.value })} />
-          <input placeholder="pH" value={form.ph} onChange={(event) => onFormChange({ ...form, ph: event.target.value })} />
-          <input placeholder="Dissolved oxygen" value={form.dissolvedO2} onChange={(event) => onFormChange({ ...form, dissolvedO2: event.target.value })} />
-          <input placeholder="Ammonia" value={form.ammonia} onChange={(event) => onFormChange({ ...form, ammonia: event.target.value })} />
-          <input placeholder="Water added %" value={form.waterAddedPercent} onChange={(event) => onFormChange({ ...form, waterAddedPercent: event.target.value })} />
-          <input placeholder="Water removed %" value={form.waterRemovedPercent} onChange={(event) => onFormChange({ ...form, waterRemovedPercent: event.target.value })} />
-          <input placeholder="Dead fish" value={form.mortality} onChange={(event) => onFormChange({ ...form, mortality: event.target.value })} />
-          <input placeholder="Mortality cause" value={form.mortalityCause} onChange={(event) => onFormChange({ ...form, mortalityCause: event.target.value })} />
-          <input type="number" min="0" step="1" placeholder="Average weight (g)" value={form.avgWeightGrams} onChange={(event) => onFormChange({ ...form, avgWeightGrams: event.target.value })} />
-          <input placeholder="Growth note" value={form.growthComment} onChange={(event) => onFormChange({ ...form, growthComment: event.target.value })} />
-          <textarea placeholder="Water or behavior note" value={form.waterComment} onChange={(event) => onFormChange({ ...form, waterComment: event.target.value })} />
-
-          <button className="primary-btn" type="submit"><Upload size={16} />Submit pond update</button>
+        <form className="worker-log-form" onSubmit={onSubmit}>
+          <table className="pond-update-form-table">
+            <thead><tr><th>Variable name</th><th>Actions/inputs</th></tr></thead>
+            <tbody>
+              <tr><td>Pond number</td><td><select value={pond.id} onChange={(event) => onPondChange(event.target.value)} required>{availablePonds.map((availablePond: any) => <option key={availablePond.id} value={availablePond.id}>Pond {availablePond.number}</option>)}</select></td></tr>
+              <tr><td>Select feed stock item</td><td><select value={form.inventoryItemId} onChange={(event) => {
+                const selectedItem = inventoryItems.find((item) => item.id === event.target.value);
+                const directSize = String(selectedItem?.feedSize || selectedItem?.size || '').trim();
+                const matchedSize = String(selectedItem?.name || '').match(/(\d+(?:\.\d+)?)mm/i)?.[0];
+                onFormChange({ ...form, inventoryItemId: event.target.value, feedSize: directSize || matchedSize || form.feedSize });
+              }} required>
+                <option value="">Select feed stock item</option>
+                {inventoryItems.filter((item) => {
+                  const category = String(item.category || '').toUpperCase();
+                  const name = String(item.name || '').toLowerCase();
+                  return (category === 'FEED' || name.includes('feed')) && Number(item.currentStock || 0) > 0;
+                }).map((item) => <option key={item.id} value={item.id}>{item.name} ({item.currentStock} {item.unit || 'kg'})</option>)}
+              </select></td></tr>
+              <tr><td>Feed size</td><td><select value={form.feedSize || (availableFeedSizes[0] || '')} onChange={(event) => onFormChange({ ...form, feedSize: event.target.value })} disabled={availableFeedSizes.length === 0} required>{availableFeedSizes.length === 0 ? <option value="">No feed in stock</option> : availableFeedSizes.map((size) => <option key={size} value={size}>{size}</option>)}</select></td></tr>
+              <tr><td>Feed amount in grams</td><td><input type="number" min="1" step="1" placeholder="Enter grams" value={form.feedGrams} onChange={(event) => onFormChange({ ...form, feedGrams: event.target.value, feedKg: event.target.value ? (Number(event.target.value) / 1000).toFixed(3) : '' })} required /></td></tr>
+              <tr><td>Appetite</td><td><select value={form.appetite} onChange={(event) => onFormChange({ ...form, appetite: event.target.value })} required><option value="">Select appetite</option><option value="5">Excellent</option><option value="4">Good</option><option value="3">Fair</option><option value="2">Poor</option><option value="1">Very poor</option></select></td></tr>
+              <tr><td>Behavior</td><td><select value={form.behavior} onChange={(event) => onFormChange({ ...form, behavior: event.target.value })} required><option value="">Select behavior</option><option value="Abnormal">Abnormal</option><option value="Poor">Poor</option><option value="Fair">Fair</option><option value="Good">Good</option><option value="Normal">Normal</option></select></td></tr>
+              <tr><td>PH</td><td><select value={form.ph} onChange={(event) => onFormChange({ ...form, ph: event.target.value })}><option value="">Optional</option><option value="6">Abnormal</option><option value="7">Normal</option><option value="8">Good</option></select></td></tr>
+              <tr><td>Ammonia</td><td><input placeholder="Optional" value={form.ammonia} onChange={(event) => onFormChange({ ...form, ammonia: event.target.value })} /></td></tr>
+              <tr><td>Mortality</td><td><input placeholder="Optional" type="number" min="0" value={form.mortality} onChange={(event) => onFormChange({ ...form, mortality: event.target.value })} /></td></tr>
+              <tr><td>Mortality cause</td><td><input placeholder="Required when mortality is entered" value={form.mortalityCause} onChange={(event) => onFormChange({ ...form, mortalityCause: event.target.value })} /></td></tr>
+              <tr><td>Average weight</td><td><input type="number" min="0" step="0.1" placeholder="Optional" value={form.avgWeightGrams} onChange={(event) => onFormChange({ ...form, avgWeightGrams: event.target.value })} /></td></tr>
+              <tr><td>Note</td><td><textarea placeholder="Optional" value={form.waterComment} onChange={(event) => onFormChange({ ...form, waterComment: event.target.value })} /></td></tr>
+            </tbody>
+          </table>
+          <div className="quick-update-actions"><button className="primary-btn" type="submit"><Upload size={16} />Submit pond update</button></div>
         </form>
-          ) : null}
     </Panel>
   );
 }

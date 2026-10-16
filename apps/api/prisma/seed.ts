@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs';
 import dotenv from 'dotenv';
 import { prisma } from '../src/lib/prisma';
+import { nextReportReference } from '../src/lib/financeTransactionId';
 
 dotenv.config();
 
@@ -37,6 +38,7 @@ async function upsertUser(user: (typeof seedUsers)[number]) {
       role: { connect: { name: user.role } },
     },
     create: {
+      reportId: await nextReportReference(prisma),
       email: user.email,
       name: user.name,
       password,
@@ -149,18 +151,21 @@ async function main() {
     });
   }
 
+  const catfishFeed = await prisma.inventoryItem.findUnique({ where: { sku: 'FEED-CATFISH-001' }, select: { reportId: true } });
   await prisma.inventoryItem.upsert({
     where: { sku: 'FEED-CATFISH-001' },
     update: { name: 'Catfish Feed', category: 'Feed', unit: 'bags', currentStock: 18, minStock: 25 },
-    create: { sku: 'FEED-CATFISH-001', name: 'Catfish Feed', category: 'Feed', unit: 'bags', currentStock: 18, minStock: 25 },
+    create: { reportId: catfishFeed?.reportId || await nextReportReference(prisma), sku: 'FEED-CATFISH-001', name: 'Catfish Feed', category: 'Feed', unit: 'bags', currentStock: 18, minStock: 25 },
   });
 
+  const oxygenTreatment = await prisma.inventoryItem.findUnique({ where: { sku: 'MED-OXY-001' }, select: { reportId: true } });
   await prisma.inventoryItem.upsert({
     where: { sku: 'MED-OXY-001' },
     update: { name: 'Oxygen Treatment', category: 'Medicine', unit: 'packs', currentStock: 12, minStock: 5 },
-    create: { sku: 'MED-OXY-001', name: 'Oxygen Treatment', category: 'Medicine', unit: 'packs', currentStock: 12, minStock: 5 },
+    create: { reportId: oxygenTreatment?.reportId || await nextReportReference(prisma), sku: 'MED-OXY-001', name: 'Oxygen Treatment', category: 'Medicine', unit: 'packs', currentStock: 12, minStock: 5 },
   });
 
+  const existingDemoTask = await prisma.task.findUnique({ where: { id: 'demo-task-morning-checklist' }, select: { reportId: true } });
   const task = await prisma.task.upsert({
     where: { id: 'demo-task-morning-checklist' },
     update: {
@@ -173,6 +178,7 @@ async function main() {
     },
     create: {
       id: 'demo-task-morning-checklist',
+      reportId: existingDemoTask?.reportId || await nextReportReference(prisma),
       title: 'Morning pond checklist',
       description: 'Feed assigned ponds, observe behavior, record water level, and upload photos.',
       creatorId: owner.id,
@@ -199,10 +205,16 @@ async function main() {
   ];
 
   for (const record of financeRecords) {
+    const existing = await prisma.financeRecord.findUnique({ where: { id: record.id }, select: { transactionId: true } });
     await prisma.financeRecord.upsert({
       where: { id: record.id },
       update: { ...record, type: record.type as any, recordedById: owner.id },
-      create: { ...record, type: record.type as any, recordedById: owner.id },
+      create: {
+        ...record,
+        transactionId: existing?.transactionId || await nextReportReference(prisma),
+        type: record.type as any,
+        recordedById: owner.id,
+      },
     });
   }
 
