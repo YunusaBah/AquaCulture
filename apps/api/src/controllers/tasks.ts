@@ -5,7 +5,10 @@ import { createNotificationForUser } from './notifications';
 import { nextReportReference } from '../lib/financeTransactionId';
 
 export async function listTasks(req: AuthRequest, res: Response) {
-  const where = req.userRole === 'WORKER' ? { assignees: { some: { userId: req.userId } } } : {};
+  const where = {
+    tenantId: req.tenantId,
+    ...(req.userRole === 'WORKER' ? { assignees: { some: { userId: req.userId } } } : {}),
+  };
   const tasks = await prisma.task.findMany({
     where,
     orderBy: { createdAt: 'desc' },
@@ -22,9 +25,19 @@ export async function createTask(req: AuthRequest, res: Response) {
   const { title, description, assigneeIds, dueAt, priority, checklist } = req.body as any;
   if (!title) return res.status(400).json({ error: 'title is required' });
 
+  const normalizedAssignees = Array.isArray(assigneeIds) ? assigneeIds : [];
+  const validAssignees = await prisma.user.findMany({
+    where: { id: { in: normalizedAssignees }, adminId: req.tenantId, role: { name: 'WORKER' } },
+    select: { id: true },
+  });
+  if (validAssignees.length !== normalizedAssignees.length) {
+    return res.status(400).json({ error: 'All assignees must be workers in this workspace.' });
+  }
+
   const task = await prisma.$transaction(async (tx) => tx.task.create({
     data: {
       reportId: await nextReportReference(tx),
+      tenantId: req.tenantId!,
       title,
       description,
       creatorId: req.userId!,
@@ -50,8 +63,8 @@ export async function createTask(req: AuthRequest, res: Response) {
 
 export async function getTask(req: AuthRequest, res: Response) {
   const { id } = req.params;
-  const task = await prisma.task.findUnique({
-    where: { id },
+  const task = await prisma.task.findFirst({
+    where: { id, tenantId: req.tenantId },
     include: { assignees: { include: { user: true } }, comments: { include: { user: true } }, creator: true },
   });
   if (!task) return res.status(404).json({ error: 'Not found' });
@@ -67,9 +80,12 @@ export async function updateTaskStatus(req: AuthRequest, res: Response) {
   const { status } = req.body as { status?: string };
   if (!status) return res.status(400).json({ error: 'status is required' });
   if (req.userRole === 'WORKER') {
-    const assignment = await prisma.taskAssignment.findFirst({ where: { taskId: id, userId: req.userId } });
+    const assignment = await prisma.taskAssignment.findFirst({ where: { taskId: id, userId: req.userId, task: { tenantId: req.tenantId } } });
     if (!assignment) return res.status(403).json({ error: 'Forbidden' });
   }
+
+  const ownedTask = await prisma.task.findFirst({ where: { id, tenantId: req.tenantId }, select: { id: true } });
+  if (!ownedTask) return res.status(404).json({ error: 'Task not found' });
 
   // Cast incoming string to the generated enum type via any to satisfy TS
   const task = await prisma.task.update({
@@ -87,6 +103,16 @@ export async function addComment(req: AuthRequest, res: Response) {
   const { id } = req.params;
   const { message } = req.body as { message?: string };
   if (!message) return res.status(400).json({ error: 'message is required' });
+
+  const task = await prisma.task.findFirst({
+    where: {
+      id,
+      tenantId: req.tenantId,
+      ...(req.userRole === 'WORKER' ? { assignees: { some: { userId: req.userId } } } : {}),
+    },
+    select: { id: true },
+  });
+  if (!task) return res.status(404).json({ error: 'Task not found' });
 
   const comment = await prisma.taskComment.create({ data: { taskId: id, userId: req.userId!, message } });
   res.status(201).json({ comment });

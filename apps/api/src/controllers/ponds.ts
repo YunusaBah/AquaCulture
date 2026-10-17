@@ -6,9 +6,11 @@ import path from 'path';
 import QRCode from 'qrcode';
 import multer from 'multer';
 import { createNotificationForUser } from './notifications';
+import { pondTenantWhere } from '../lib/tenant';
+import { uploadsDirectory } from '../lib/uploads';
 import type { FeedingLog, MortalityLog, HarvestLog, GrowthMeasurement, WaterQualityLog } from '@prisma/client';
 
-const upload = multer({ dest: path.join(process.cwd(), 'uploads') });
+const upload = multer({ dest: uploadsDirectory });
 
 function startOfToday() {
   const date = new Date();
@@ -91,7 +93,10 @@ function buildHarvestProjection(pond: {
 
 export async function getPonds(req: AuthRequest, res: Response) {
   const ponds = await prisma.pond.findMany({
-    where: req.userRole === 'WORKER' ? { assignedUserId: req.userId } : {},
+    where: {
+      ...pondTenantWhere(req.tenantId || ''),
+      ...(req.userRole === 'WORKER' ? { assignedUserId: req.userId } : {}),
+    },
     orderBy: { number: 'asc' },
     include: {
       site: true,
@@ -110,8 +115,8 @@ export async function getPond(req: AuthRequest, res: Response) {
   const today = startOfToday();
 
   // basic pond record
-  const pond = await prisma.pond.findUnique({
-    where: { id },
+  const pond = await prisma.pond.findFirst({
+    where: { id, ...pondTenantWhere(req.tenantId || '') },
     include: {
       site: true,
       assignedUser: { select: { id: true, name: true, email: true } },
@@ -231,11 +236,11 @@ export async function createPond(req: AuthRequest, res: Response) {
   let pond;
   try {
     pond = await prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(74152861)`;
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(74152861)::text AS locked`;
       let selectedSite = siteId
-        ? await tx.farmSite.findUnique({ where: { id: siteId }, select: { id: true } })
+        ? await tx.farmSite.findFirst({ where: { id: siteId, farm: { ownerId: req.tenantId } }, select: { id: true } })
         : await tx.farmSite.findFirst({
-          where: { farm: { ownerId: req.userId } },
+          where: { farm: { ownerId: req.tenantId } },
           orderBy: { createdAt: 'asc' },
           select: { id: true },
         });
@@ -247,7 +252,8 @@ export async function createPond(req: AuthRequest, res: Response) {
         const farm = await tx.farm.create({
           data: {
             name: 'AquaCulture Farm',
-            ownerId: req.userId || '',
+            ownerId: req.tenantId || '',
+            members: { connect: await tx.user.findMany({ where: { adminId: req.tenantId }, select: { id: true } }) },
             sites: { create: { name: 'AquaCulture Farm - Main Site', location: 'Farm site', timezone: 'UTC' } },
           },
           include: { sites: { take: 1, select: { id: true } } },
@@ -258,7 +264,15 @@ export async function createPond(req: AuthRequest, res: Response) {
         throw new Error('A farm site could not be created for this pond.');
       }
 
-      const highestNumberedPond = await tx.pond.findFirst({ orderBy: { number: 'desc' }, select: { number: true } });
+      const highestNumberedPond = await tx.pond.findFirst({
+        where: { ...pondTenantWhere(req.tenantId || '') },
+        orderBy: { number: 'desc' },
+        select: { number: true },
+      });
+      if (assignedUserId) {
+        const worker = await tx.user.findFirst({ where: { id: assignedUserId, adminId: req.tenantId, role: { name: 'WORKER' } }, select: { id: true } });
+        if (!worker) throw new Error('The selected worker does not belong to this workspace.');
+      }
       const number = Math.max(requestedNumber || 0, (highestNumberedPond?.number ?? 0) + 1);
       return tx.pond.create({
         data: {
@@ -304,7 +318,7 @@ export async function createPond(req: AuthRequest, res: Response) {
   }
 
   const workers = await prisma.user.findMany({
-    where: { role: { name: 'WORKER' } },
+    where: { role: { name: 'WORKER' }, adminId: req.tenantId },
     select: { id: true },
   });
   await Promise.all(workers.map((worker) => createNotificationForUser(
@@ -319,10 +333,28 @@ export async function createPond(req: AuthRequest, res: Response) {
 
 export async function updatePond(req: AuthRequest, res: Response) {
   const { id } = req.params;
-  const data = req.body;
+  const allowedFields = new Set([
+    'siteId',
+    'number',
+    'species',
+    'capacity',
+    'current_volume',
+    'initial_population',
+    'current_population',
+    'stockedAt',
+    'initialAvgWeightG',
+    'targetHarvestKg',
+    'targetHarvestDate',
+    'recommendedFeedSize',
+    'expectedGrowthGDay',
+    'assignedUserId',
+    'status',
+  ]);
+  const data = Object.fromEntries(Object.entries(req.body ?? {}).filter(([field]) => allowedFields.has(field)));
+  if (Object.keys(data).length === 0) return res.status(400).json({ error: 'No supported pond fields were provided' });
   try {
-    const existing = await prisma.pond.findUnique({
-      where: { id },
+    const existing = await prisma.pond.findFirst({
+      where: { id, ...pondTenantWhere(req.tenantId || '') },
       select: { number: true, assignedUserId: true, targetHarvestDate: true, site: { select: { name: true } } },
     });
 
@@ -331,6 +363,14 @@ export async function updatePond(req: AuthRequest, res: Response) {
     }
     if (req.userRole === 'WORKER' && !workerCanAccessPond(existing.assignedUserId, req.userId)) {
       return res.status(403).json({ error: 'You can only update ponds assigned to you.' });
+    }
+    if (data.siteId) {
+      const site = await prisma.farmSite.findFirst({ where: { id: data.siteId, farm: { ownerId: req.tenantId } }, select: { id: true } });
+      if (!site) return res.status(404).json({ error: 'Farm site not found' });
+    }
+    if (data.assignedUserId) {
+      const worker = await prisma.user.findFirst({ where: { id: data.assignedUserId, adminId: req.tenantId, role: { name: 'WORKER' } }, select: { id: true } });
+      if (!worker) return res.status(400).json({ error: 'The selected worker does not belong to this workspace.' });
     }
 
     const pond = await prisma.pond.update({ where: { id }, data, include: { site: true, assignedUser: true, attachments: true } });
@@ -346,13 +386,14 @@ export async function updatePond(req: AuthRequest, res: Response) {
     });
 
     const workerIds = new Set<string>();
-    if (data.assignedUserId) workerIds.add(data.assignedUserId);
-    if (existing.assignedUserId && existing.assignedUserId !== data.assignedUserId) workerIds.add(existing.assignedUserId);
+    const assignedUserId = typeof data.assignedUserId === 'string' ? data.assignedUserId : undefined;
+    if (assignedUserId) workerIds.add(assignedUserId);
+    if (existing.assignedUserId && existing.assignedUserId !== assignedUserId) workerIds.add(existing.assignedUserId);
 
     if (data.targetHarvestDate !== undefined && data.targetHarvestDate !== null) {
-      const targetDate = new Date(data.targetHarvestDate);
+      const targetDate = new Date(String(data.targetHarvestDate));
       const workers = await prisma.user.findMany({
-        where: { role: { name: 'WORKER' } },
+        where: { role: { name: 'WORKER' }, adminId: req.tenantId },
         select: { id: true, name: true },
       });
       await Promise.all(workers.map((worker) => createNotificationForUser(
@@ -365,7 +406,7 @@ export async function updatePond(req: AuthRequest, res: Response) {
 
     if (data.recommendedFeedSize !== undefined) {
       const workers = await prisma.user.findMany({
-        where: { role: { name: 'WORKER' } },
+        where: { role: { name: 'WORKER' }, adminId: req.tenantId },
         select: { id: true },
       });
       await Promise.all(workers.map((worker) => createNotificationForUser(
@@ -376,8 +417,8 @@ export async function updatePond(req: AuthRequest, res: Response) {
       )));
     }
 
-    if (data.assignedUserId !== undefined && data.assignedUserId) {
-      const assignedUser = await prisma.user.findUnique({ where: { id: data.assignedUserId }, select: { id: true, name: true } });
+    if (assignedUserId) {
+      const assignedUser = await prisma.user.findFirst({ where: { id: assignedUserId, adminId: req.tenantId }, select: { id: true, name: true } });
       if (assignedUser) {
         await createNotificationForUser(
           assignedUser.id,
@@ -390,7 +431,7 @@ export async function updatePond(req: AuthRequest, res: Response) {
 
     if (workerIds.size > 0) {
       const workers = await prisma.user.findMany({
-        where: { id: { in: Array.from(workerIds) }, role: { name: 'WORKER' } },
+        where: { id: { in: Array.from(workerIds) }, role: { name: 'WORKER' }, adminId: req.tenantId },
         select: { id: true },
       });
       await Promise.all(workers.map((worker) => createNotificationForUser(
@@ -416,6 +457,8 @@ export async function deletePond(req: AuthRequest, res: Response) {
   }
 
   try {
+    const ownedPond = await prisma.pond.findFirst({ where: { id, ...pondTenantWhere(req.tenantId || '') }, select: { id: true } });
+    if (!ownedPond) return res.status(404).json({ error: 'Pond not found' });
     const [feedLogs, waterLogs, mortalityLogs, harvestLogs, growthMeasurements, attachments] = await Promise.all([
       prisma.feedingLog.findMany({ where: { pondId: id }, select: { id: true } }),
       prisma.waterQualityLog.findMany({ where: { pondId: id }, select: { id: true } }),
@@ -447,7 +490,7 @@ export async function deletePond(req: AuthRequest, res: Response) {
         });
       }
 
-      await tx.financeRecord.deleteMany({ where: { pondId: id } });
+      await tx.financeRecord.deleteMany({ where: { pondId: id, tenantId: req.tenantId } });
       await tx.feedingLog.deleteMany({ where: { pondId: id } });
       await tx.waterQualityLog.deleteMany({ where: { pondId: id } });
       await tx.mortalityLog.deleteMany({ where: { pondId: id } });
@@ -470,6 +513,8 @@ export function photoUploadMiddleware() {
 
 export async function uploadPondPhoto(req: AuthRequest, res: Response) {
   const { id } = req.params;
+  const pondExists = await prisma.pond.findFirst({ where: { id, ...pondTenantWhere(req.tenantId || '') }, select: { id: true } });
+  if (!pondExists) return res.status(404).json({ error: 'Pond not found' });
   if (req.userRole === 'WORKER') {
     const pond = await prisma.pond.findUnique({ where: { id }, select: { assignedUserId: true } });
     if (!pond || !workerCanAccessPond(pond.assignedUserId, req.userId)) return res.status(403).json({ error: 'Forbidden' });
@@ -477,11 +522,11 @@ export async function uploadPondPhoto(req: AuthRequest, res: Response) {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const file = req.file;
   // move file to a stable path with original name
-  const uploadsDir = path.join(process.cwd(), 'uploads');
-  const target = path.join(uploadsDir, `${Date.now()}-${file.originalname}`);
+  const target = path.join(uploadsDirectory, `${Date.now()}-${path.basename(file.originalname)}`);
   fs.renameSync(file.path, target);
 
-  const url = `/uploads/${path.basename(target)}`; // static serving assumed
+  const uploadPath = `/uploads/${path.basename(target)}`;
+  const url = process.env.VERCEL ? `/api${uploadPath}` : uploadPath;
   const attachment = await prisma.attachment.create({ data: { url, mime: file.mimetype, uploadedById: req.userId || null, pondId: id } });
 
   res.status(201).json({ attachment });
@@ -489,7 +534,7 @@ export async function uploadPondPhoto(req: AuthRequest, res: Response) {
 
 export async function getPondQr(req: AuthRequest, res: Response) {
   const { id } = req.params;
-  const pond = await prisma.pond.findUnique({ where: { id } });
+  const pond = await prisma.pond.findFirst({ where: { id, ...pondTenantWhere(req.tenantId || '') } });
   if (!pond) return res.status(404).send('Not found');
   if (req.userRole === 'WORKER' && !workerCanAccessPond(pond.assignedUserId, req.userId)) {
     return res.status(403).json({ error: 'Forbidden' });

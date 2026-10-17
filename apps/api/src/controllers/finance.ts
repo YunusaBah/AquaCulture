@@ -2,6 +2,8 @@ import { Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { AuthRequest } from '../middleware/auth';
 import { nextReportReference } from '../lib/financeTransactionId';
+import { pondBelongsToTenant } from '../lib/tenant';
+import { calculateProductionCosting, filterTenantPondMovements, normalizeWeekStart } from '../lib/productionCosting';
 
 function financeSummary(records: Array<{ type: string; amount: number; pondId: string | null }>) {
   const salesRecords = records.filter((record) => record.type === 'SALES');
@@ -55,6 +57,7 @@ function financeSummary(records: Array<{ type: string; amount: number; pondId: s
 
 export async function getFinanceOverview(req: AuthRequest, res: Response) {
   const records = await prisma.financeRecord.findMany({
+    where: { tenantId: req.tenantId },
     orderBy: { recordedAt: 'desc' },
     include: {
       pond: { select: { id: true, number: true } },
@@ -66,7 +69,18 @@ export async function getFinanceOverview(req: AuthRequest, res: Response) {
 }
 
 export async function createFinanceRecord(req: AuthRequest, res: Response) {
-  const { type, category, description, quantity, unit, unitPrice, amount, pondId } = req.body as any;
+  const { type, category, description, quantity, unit, unitPrice, amount, pondId, coverageStart, coverageEnd } = req.body as {
+    type?: string;
+    category?: string;
+    description?: string;
+    quantity?: number | string;
+    unit?: string;
+    unitPrice?: number | string;
+    amount?: number | string;
+    pondId?: string;
+    coverageStart?: string;
+    coverageEnd?: string;
+  };
 
   if (!type || !category) {
     return res.status(400).json({ error: 'type and category are required' });
@@ -104,6 +118,19 @@ export async function createFinanceRecord(req: AuthRequest, res: Response) {
   if (resolvedAmount < 0) {
     return res.status(400).json({ error: 'amount must be non-negative' });
   }
+  if (pondId && !(await pondBelongsToTenant(String(pondId), req.tenantId || ''))) {
+    return res.status(404).json({ error: 'Pond not found' });
+  }
+
+  const coverageStartValue = coverageStart || coverageEnd;
+  const coverageEndValue = coverageEnd || coverageStart;
+  const parsedCoverageStart = coverageStartValue ? new Date(`${coverageStartValue.slice(0, 10)}T00:00:00.000Z`) : null;
+  const parsedCoverageEnd = coverageEndValue ? new Date(`${coverageEndValue.slice(0, 10)}T00:00:00.000Z`) : null;
+  if ((coverageStart && Number.isNaN(parsedCoverageStart?.getTime()))
+    || (coverageEnd && Number.isNaN(parsedCoverageEnd?.getTime()))
+    || (parsedCoverageStart && parsedCoverageEnd && parsedCoverageEnd < parsedCoverageStart)) {
+    return res.status(400).json({ error: 'Cost coverage dates must be valid and the end date cannot be before the start date.' });
+  }
 
   const record = await prisma.$transaction(async (tx) => tx.financeRecord.create({
     data: {
@@ -116,7 +143,10 @@ export async function createFinanceRecord(req: AuthRequest, res: Response) {
       unitPrice: uNum ?? null,
       amount: resolvedAmount,
       pondId: pondId || null,
+      coverageStart: parsedCoverageStart,
+      coverageEnd: parsedCoverageEnd,
       recordedById: req.userId!,
+      tenantId: req.tenantId!,
     },
     include: {
       pond: { select: { id: true, number: true } },
@@ -127,6 +157,78 @@ export async function createFinanceRecord(req: AuthRequest, res: Response) {
   res.status(201).json({ record });
 }
 
+export async function getProductionCosting(req: AuthRequest, res: Response) {
+  let weekStart: Date;
+  try {
+    weekStart = normalizeWeekStart(req.query.weekStart);
+  } catch (error) {
+    return res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid week start.' });
+  }
+
+  const now = new Date();
+  const [pondRows, movements, expenses, harvests] = await Promise.all([
+    prisma.pond.findMany({
+      where: { site: { farm: { ownerId: req.tenantId } } },
+      select: {
+        id: true,
+        number: true,
+        species: true,
+        status: true,
+        stockedAt: true,
+        createdAt: true,
+        harvestLogs: { orderBy: { recordedAt: 'desc' }, take: 1, select: { recordedAt: true } },
+      },
+    }),
+    prisma.inventoryTransaction.findMany({
+      where: { item: { tenantId: req.tenantId } },
+      select: { pondId: true, change: true, unitCost: true, createdAt: true, item: { select: { category: true } } },
+      orderBy: { createdAt: 'asc' },
+    }),
+    prisma.financeRecord.findMany({
+      where: { tenantId: req.tenantId, type: { in: ['RUNNING_COST', 'FIXED_COST', 'SALES'] } },
+      select: { id: true, type: true, amount: true, pondId: true, coverageStart: true, coverageEnd: true, recordedAt: true, category: true, description: true },
+    }),
+    prisma.harvestLog.findMany({
+      where: { pond: { site: { farm: { ownerId: req.tenantId } } } },
+      select: { pondId: true, numberHarvested: true, biomassKg: true, avgWeightGrams: true, recordedAt: true },
+    }),
+  ]);
+  const tenantPondIds = new Set(pondRows.map((pond) => pond.id));
+  const ponds = pondRows.map((pond) => ({
+    id: pond.id,
+    number: pond.number,
+    species: pond.species,
+    status: pond.status,
+    stockedAt: pond.stockedAt,
+    createdAt: pond.createdAt,
+    harvestedAt: pond.harvestLogs[0]?.recordedAt || null,
+  }));
+
+  res.json(calculateProductionCosting({
+    ponds,
+    movements: filterTenantPondMovements(tenantPondIds, movements)
+      .map((movement) => ({
+        pondId: movement.pondId,
+        category: movement.item.category,
+        change: movement.change,
+        unitCost: movement.unitCost,
+        createdAt: movement.createdAt,
+      })),
+    expenses: expenses
+      .filter((expense) => !expense.pondId || tenantPondIds.has(expense.pondId))
+      .map((expense) => ({ ...expense, pondId: expense.pondId })),
+    harvests: harvests.map((harvest) => ({
+      pondId: harvest.pondId,
+      numberHarvested: harvest.numberHarvested,
+      biomassKg: harvest.biomassKg,
+      avgWeightGrams: harvest.avgWeightGrams,
+      recordedAt: harvest.recordedAt,
+    })),
+    weekStart,
+    now,
+  }));
+}
+
 export async function deleteFinanceRecord(req: AuthRequest, res: Response) {
   const { id } = req.params;
 
@@ -134,6 +236,8 @@ export async function deleteFinanceRecord(req: AuthRequest, res: Response) {
     return res.status(403).json({ error: 'Only the farm owner can delete financial records.' });
   }
 
-  await prisma.financeRecord.delete({ where: { id } });
+  const record = await prisma.financeRecord.findFirst({ where: { id, tenantId: req.tenantId } });
+  if (!record) return res.status(404).json({ error: 'Finance record not found' });
+  await prisma.financeRecord.delete({ where: { id: record.id } });
   res.status(204).send();
 }

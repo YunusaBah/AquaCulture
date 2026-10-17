@@ -7,7 +7,8 @@ export async function createSite(req: AuthRequest, res: Response) {
   if (!name) return res.status(400).json({ error: 'name is required' });
 
   if (farmId) {
-    // create site under existing farm
+    const farm = await prisma.farm.findFirst({ where: { id: farmId, ownerId: req.tenantId } });
+    if (!farm) return res.status(404).json({ error: 'Farm not found' });
     const site = await prisma.farmSite.create({ data: { name, farmId, location, timezone } });
     return res.status(201).json({ site });
   }
@@ -16,7 +17,8 @@ export async function createSite(req: AuthRequest, res: Response) {
   const farm = await prisma.farm.create({
     data: {
       name,
-      ownerId: req.userId || '',
+      ownerId: req.tenantId || '',
+      members: { connect: await prisma.user.findMany({ where: { adminId: req.tenantId }, select: { id: true } }) },
       sites: { create: { name, location: location || 'Farm site', timezone: timezone || 'UTC' } },
     },
     include: { sites: true },

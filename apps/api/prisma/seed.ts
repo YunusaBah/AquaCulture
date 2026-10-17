@@ -27,7 +27,7 @@ const seedUsers: SeedUser[] = [
   },
 ];
 
-async function upsertUser(user: (typeof seedUsers)[number]) {
+async function upsertUser(user: (typeof seedUsers)[number], adminId?: string) {
   const password = await bcrypt.hash(user.password, 10);
 
   return prisma.user.upsert({
@@ -36,6 +36,7 @@ async function upsertUser(user: (typeof seedUsers)[number]) {
       name: user.name,
       password,
       role: { connect: { name: user.role } },
+      ...(adminId ? { admin: { connect: { id: adminId } } } : {}),
     },
     create: {
       reportId: await nextReportReference(prisma),
@@ -43,6 +44,7 @@ async function upsertUser(user: (typeof seedUsers)[number]) {
       name: user.name,
       password,
       role: { connect: { name: user.role } },
+      ...(adminId ? { admin: { connect: { id: adminId } } } : {}),
     },
     include: { role: true },
   });
@@ -62,20 +64,8 @@ async function main() {
     await prisma.role.upsert({ where: { name: role }, update: {}, create: { name: role } });
   }
 
-  // Create registration code for OWNER only
-  const registrationCodes = [
-    { code: process.env.SEED_OWNER_CODE || 'OWNER2024', role: 'OWNER' as const },
-  ];
-
-  for (const regCode of registrationCodes) {
-    await prisma.registrationCode.upsert({
-      where: { code: regCode.code },
-      update: {},
-      create: { ...regCode, isUsed: false },
-    });
-  }
-
-  const [owner, worker] = await Promise.all(seedUsers.map(upsertUser));
+  const owner = await upsertUser(seedUsers[0]);
+  const worker = await upsertUser(seedUsers[1], owner.id);
 
   const farm = await prisma.farm.upsert({
     where: { id: 'demo-farm-aquaculture' },
@@ -151,18 +141,18 @@ async function main() {
     });
   }
 
-  const catfishFeed = await prisma.inventoryItem.findUnique({ where: { sku: 'FEED-CATFISH-001' }, select: { reportId: true } });
+  const catfishFeed = await prisma.inventoryItem.findUnique({ where: { tenantId_sku: { tenantId: owner.id, sku: 'FEED-CATFISH-001' } }, select: { reportId: true } });
   await prisma.inventoryItem.upsert({
-    where: { sku: 'FEED-CATFISH-001' },
+    where: { tenantId_sku: { tenantId: owner.id, sku: 'FEED-CATFISH-001' } },
     update: { name: 'Catfish Feed', category: 'Feed', unit: 'bags', currentStock: 18, minStock: 25 },
-    create: { reportId: catfishFeed?.reportId || await nextReportReference(prisma), sku: 'FEED-CATFISH-001', name: 'Catfish Feed', category: 'Feed', unit: 'bags', currentStock: 18, minStock: 25 },
+    create: { reportId: catfishFeed?.reportId || await nextReportReference(prisma), tenantId: owner.id, sku: 'FEED-CATFISH-001', name: 'Catfish Feed', category: 'Feed', unit: 'bags', currentStock: 18, minStock: 25 },
   });
 
-  const oxygenTreatment = await prisma.inventoryItem.findUnique({ where: { sku: 'MED-OXY-001' }, select: { reportId: true } });
+  const oxygenTreatment = await prisma.inventoryItem.findUnique({ where: { tenantId_sku: { tenantId: owner.id, sku: 'MED-OXY-001' } }, select: { reportId: true } });
   await prisma.inventoryItem.upsert({
-    where: { sku: 'MED-OXY-001' },
+    where: { tenantId_sku: { tenantId: owner.id, sku: 'MED-OXY-001' } },
     update: { name: 'Oxygen Treatment', category: 'Medicine', unit: 'packs', currentStock: 12, minStock: 5 },
-    create: { reportId: oxygenTreatment?.reportId || await nextReportReference(prisma), sku: 'MED-OXY-001', name: 'Oxygen Treatment', category: 'Medicine', unit: 'packs', currentStock: 12, minStock: 5 },
+    create: { reportId: oxygenTreatment?.reportId || await nextReportReference(prisma), tenantId: owner.id, sku: 'MED-OXY-001', name: 'Oxygen Treatment', category: 'Medicine', unit: 'packs', currentStock: 12, minStock: 5 },
   });
 
   const existingDemoTask = await prisma.task.findUnique({ where: { id: 'demo-task-morning-checklist' }, select: { reportId: true } });
@@ -172,6 +162,7 @@ async function main() {
       title: 'Morning pond checklist',
       description: 'Feed assigned ponds, observe behavior, record water level, and upload photos.',
       creatorId: owner.id,
+      tenantId: owner.id,
       status: 'OPEN',
       priority: 'HIGH',
       checklist: ['Feed Pond 1', 'Feed Pond 2', 'Observe Fish', 'Upload Photos', 'Record Water Level'],
@@ -182,6 +173,7 @@ async function main() {
       title: 'Morning pond checklist',
       description: 'Feed assigned ponds, observe behavior, record water level, and upload photos.',
       creatorId: owner.id,
+      tenantId: owner.id,
       status: 'OPEN',
       priority: 'HIGH',
       checklist: ['Feed Pond 1', 'Feed Pond 2', 'Observe Fish', 'Upload Photos', 'Record Water Level'],
@@ -208,12 +200,13 @@ async function main() {
     const existing = await prisma.financeRecord.findUnique({ where: { id: record.id }, select: { transactionId: true } });
     await prisma.financeRecord.upsert({
       where: { id: record.id },
-      update: { ...record, type: record.type as any, recordedById: owner.id },
+      update: { ...record, type: record.type as any, recordedById: owner.id, tenantId: owner.id },
       create: {
         ...record,
         transactionId: existing?.transactionId || await nextReportReference(prisma),
         type: record.type as any,
         recordedById: owner.id,
+        tenantId: owner.id,
       },
     });
   }

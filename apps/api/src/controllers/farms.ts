@@ -4,6 +4,7 @@ import { AuthRequest } from '../middleware/auth';
 
 export async function getFarms(req: AuthRequest, res: Response) {
   const farms = await prisma.farm.findMany({
+    where: { ownerId: req.tenantId },
     orderBy: { createdAt: 'desc' },
     include: {
       owner: { select: { id: true, name: true, email: true } },
@@ -25,7 +26,8 @@ export async function createFarm(req: AuthRequest, res: Response) {
   const farm = await prisma.farm.create({
     data: {
       name,
-      ownerId: req.userId || '',
+      ownerId: req.tenantId || '',
+      members: { connect: await prisma.user.findMany({ where: { adminId: req.tenantId }, select: { id: true } }) },
       sites: {
         create: {
           name: `${name} - Main Site`,

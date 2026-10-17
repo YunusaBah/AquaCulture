@@ -2,8 +2,9 @@ import { Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { AuthRequest } from '../middleware/auth';
 
-export async function listChatMessages(_req: AuthRequest, res: Response) {
+export async function listChatMessages(req: AuthRequest, res: Response) {
   const messages = await prisma.chatMessage.findMany({
+    where: { tenantId: req.tenantId },
     orderBy: { createdAt: 'asc' },
     take: 250,
     include: {
@@ -50,6 +51,7 @@ export async function createChatMessage(req: AuthRequest, res: Response) {
   const message = await prisma.chatMessage.create({
     data: {
       senderId: userId,
+      tenantId: req.tenantId!,
       text: normalizedText || null,
       imageUrl: payloadImageUrl,
       mentions: payloadMentions,
@@ -94,12 +96,14 @@ export async function deleteChatMessage(req: AuthRequest, res: Response) {
   if (!message) {
     return res.status(404).json({ error: 'Message not found' });
   }
+  const tenantMessage = await prisma.chatMessage.findFirst({ where: { id, tenantId: req.tenantId }, select: { id: true } });
+  if (!tenantMessage) return res.status(404).json({ error: 'Message not found' });
 
   if (req.userRole !== 'OWNER' && message.senderId !== req.userId) {
     return res.status(403).json({ error: 'Forbidden' });
   }
 
-  await prisma.chatMessage.delete({ where: { id } });
+  await prisma.chatMessage.delete({ where: { id: tenantMessage.id } });
   res.json({ success: true });
 }
 
@@ -109,10 +113,10 @@ export async function clearChatMessages(req: AuthRequest, res: Response) {
     if (req.userRole !== 'OWNER') {
       return res.status(403).json({ error: 'Forbidden' });
     }
-    await prisma.chatMessage.deleteMany({});
+    await prisma.chatMessage.deleteMany({ where: { tenantId: req.tenantId } });
     return res.json({ success: true, clearedAll: true });
   }
 
-  await prisma.chatMessage.deleteMany({ where: { senderId: req.userId! } });
+  await prisma.chatMessage.deleteMany({ where: { senderId: req.userId!, tenantId: req.tenantId } });
   res.json({ success: true, clearedAll: false });
 }

@@ -14,8 +14,9 @@ export async function listNotifications(req: AuthRequest, res: Response) {
 
 export async function markRead(req: AuthRequest, res: Response) {
   const { id } = req.params;
-  const n = await prisma.notification.update({ where: { id }, data: { read: true } });
-  res.json({ notification: n });
+  const n = await prisma.notification.updateMany({ where: { id, userId: req.userId }, data: { read: true } });
+  if (!n.count) return res.status(404).json({ error: 'Notification not found' });
+  res.json({ success: true });
 }
 
 // Internal utility: create notification (can be used by server side modules)

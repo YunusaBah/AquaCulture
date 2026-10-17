@@ -24,6 +24,7 @@ export const ROLE_PERMISSIONS: Record<RoleName, string[]> = {
     'OBSERVATION_VIEW',
     'OBSERVATION_UPDATE',
     'HARVEST_CREATE',
+    'HARVEST_VIEW_ASSIGNED',
     'HARVEST_VIEW',
     'HARVEST_UPDATE',
     'TASK_CREATE',
@@ -46,6 +47,7 @@ export const ROLE_PERMISSIONS: Record<RoleName, string[]> = {
     'REPORT_VIEW',
     'REPORT_EXPORT',
     'AUDIT_VIEW',
+    'ATTACHMENT_CREATE',
   ],
   WORKER: [
     'POND_VIEW_ASSIGNED',
@@ -59,6 +61,8 @@ export const ROLE_PERMISSIONS: Record<RoleName, string[]> = {
     'WATER_CHANGE_VIEW_ASSIGNED',
     'MORTALITY_CREATE',
     'MORTALITY_VIEW_ASSIGNED',
+    'HARVEST_CREATE',
+    'HARVEST_VIEW_ASSIGNED',
     'OBSERVATION_CREATE',
     'OBSERVATION_VIEW_ASSIGNED',
     'TASK_VIEW_ASSIGNED',
@@ -66,6 +70,7 @@ export const ROLE_PERMISSIONS: Record<RoleName, string[]> = {
     'TASK_COMMENT',
     'ATTACHMENT_CREATE',
     'INVENTORY_VIEW',
+    'REPORT_VIEW',
   ],
 };
 export function normalizeRole(role?: string): RoleName | null {

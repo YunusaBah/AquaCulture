@@ -2,20 +2,21 @@ import { Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { AuthRequest } from '../middleware/auth';
 import { createNotificationForUser } from './notifications';
+import { pondTenantWhere } from '../lib/tenant';
 
 function workerCanAccessPond(assignedUserId: string | null | undefined, workerId?: string) {
   return !assignedUserId || assignedUserId === workerId;
 }
 
 export async function getHarvests(req: AuthRequest, res: Response) {
-  const where = req.userRole === 'WORKER' ? {
+  const where = {
     pond: {
-      OR: [
-        { assignedUserId: req.userId },
-        { assignedUserId: null },
+      AND: [
+        pondTenantWhere(req.tenantId || ''),
+        ...(req.userRole === 'WORKER' ? [{ OR: [{ assignedUserId: req.userId }, { assignedUserId: null }] }] : []),
       ],
     },
-  } : {};
+  };
   const harvests = await prisma.harvestLog.findMany({
     where,
     orderBy: { recordedAt: 'desc' },
@@ -41,7 +42,7 @@ export async function createHarvest(req: AuthRequest, res: Response) {
   if (numberHarvested < 0) return res.status(400).json({ error: 'Invalid harvest quantity' });
 
   // ensure pond exists
-  const pondWithLogs = await prisma.pond.findUnique({ where: { id: pondId } });
+  const pondWithLogs = await prisma.pond.findFirst({ where: { id: pondId, ...pondTenantWhere(req.tenantId || '') } });
   if (!pondWithLogs) return res.status(404).json({ error: 'Pond not found' });
   if (req.userRole === 'WORKER' && !workerCanAccessPond(pondWithLogs.assignedUserId, req.userId)) {
     return res.status(403).json({ error: 'Forbidden' });
@@ -98,7 +99,7 @@ export async function updateHarvest(req: AuthRequest, res: Response) {
   const { id } = req.params as { id?: string };
   if (!id) return res.status(400).json({ error: 'harvest id required' });
 
-  const existingHarvest = await prisma.harvestLog.findUnique({ where: { id } });
+  const existingHarvest = await prisma.harvestLog.findFirst({ where: { id, pond: pondTenantWhere(req.tenantId || '') } });
   if (!existingHarvest) return res.status(404).json({ error: 'Harvest not found' });
 
   if (req.userRole === 'WORKER' && existingHarvest.workerId !== req.userId) {
@@ -159,7 +160,7 @@ export async function deleteHarvest(req: AuthRequest, res: Response) {
   const { id } = req.params as { id?: string };
   if (!id) return res.status(400).json({ error: 'harvest id required' });
 
-  const harvest = await prisma.harvestLog.findUnique({ where: { id } });
+  const harvest = await prisma.harvestLog.findFirst({ where: { id, pond: pondTenantWhere(req.tenantId || '') } });
   if (!harvest) return res.status(404).json({ error: 'Harvest not found' });
 
   // workers may only delete their own harvest records

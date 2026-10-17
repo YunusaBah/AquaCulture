@@ -21,6 +21,13 @@ model User {
   password        String
   loginCode       String?           // Special code for OWNER login
   blocked         Boolean           @default(false)
+  adminId         String?
+  admin           User?             @relation("admin_workers", fields: [adminId], references: [id], onDelete: SetNull)
+  workers         User[]            @relation("admin_workers")
+  permissions     Json?
+  profilePhoto    String?
+  fontSize        String            @default("medium")
+  highContrast    Boolean           @default(false)
   role            Role              @relation(fields: [roleId], references: [id])
   roleId          String
   registrationCode RegistrationCode? @relation("codeUsedBy")
@@ -48,6 +55,8 @@ model User {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([adminId])
 }
 
 model Role {
@@ -148,7 +157,10 @@ model FinanceRecord {
   pondId      String?
   recordedBy  User                @relation(fields: [recordedById], references: [id])
   recordedById String
+  tenantId    String?
   recordedAt  DateTime            @default(now())
+  coverageStart DateTime?
+  coverageEnd   DateTime?
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt
 }
@@ -249,13 +261,16 @@ model GrowthMeasurement {
 model InventoryItem {
   id           String                 @id @default(uuid())
   reportId     String                 @unique
-  sku          String?                @unique
+  sku          String?
+  tenantId     String?
   name         String
   category     String
   unit         String
   currentStock Float                  @default(0)
   minStock     Float                  @default(0)
   transactions InventoryTransaction[]
+
+  @@unique([tenantId, sku])
 }
 
 model InventoryTransaction {
@@ -265,6 +280,7 @@ model InventoryTransaction {
   pond      Pond?         @relation(fields: [pondId], references: [id])
   pondId    String?
   change    Float
+  unitCost  Float?
   reason    String?
   createdAt DateTime      @default(now())
 }
@@ -311,6 +327,7 @@ model Task {
   description String?
   creator     User             @relation(fields: [creatorId], references: [id])
   creatorId   String
+  tenantId   String?
   assignees   TaskAssignment[]
   comments    TaskComment[]
   status      TaskStatus       @default(OPEN)
@@ -358,6 +375,7 @@ model ChatMessage {
   id        String   @id @default(uuid())
   sender    User     @relation(fields: [senderId], references: [id])
   senderId  String
+  tenantId  String?
   text      String?
   imageUrl  String?
   mentions  Json?
@@ -369,6 +387,7 @@ model DeviceSync {
   id        String      @id @default(uuid())
   user      User?       @relation(fields: [userId], references: [id])
   userId    String?
+  clientId  String?
   deviceId  String
   action    String
   tableName String?
@@ -378,6 +397,8 @@ model DeviceSync {
   syncedAt  DateTime?
   createdAt DateTime    @default(now())
   updatedAt DateTime    @updatedAt
+
+  @@unique([userId, clientId])
 }
 
 model AppSetting {

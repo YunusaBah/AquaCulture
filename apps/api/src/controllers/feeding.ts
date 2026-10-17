@@ -1,21 +1,23 @@
 import { Response } from 'express';
 import { prisma } from '../lib/prisma';
-import { AuthRequest } from '../middleware/auth';
+import { AuthRequest, hasRequestPermission } from '../middleware/auth';
 import { createNotificationForUser } from './notifications';
+import { pondTenantWhere } from '../lib/tenant';
+import { calculateWeightedAverageIssueCost } from '../lib/productionCosting';
 
 function workerCanAccessPond(assignedUserId: string | null | undefined, workerId?: string) {
   return !assignedUserId || assignedUserId === workerId;
 }
 
 export async function getFeedings(req: AuthRequest, res: Response) {
-  const where = req.userRole === 'WORKER' ? {
+  const where = {
     pond: {
-      OR: [
-        { assignedUserId: req.userId },
-        { assignedUserId: null },
+      AND: [
+        pondTenantWhere(req.tenantId || ''),
+        ...(req.userRole === 'WORKER' ? [{ OR: [{ assignedUserId: req.userId }, { assignedUserId: null }] }] : []),
       ],
     },
-  } : {};
+  };
   const feedings = await prisma.feedingLog.findMany({
     where,
     orderBy: { date: 'desc' },
@@ -42,18 +44,17 @@ export async function createFeeding(req: AuthRequest, res: Response) {
     inventoryItemId?: string;
   };
 
-  if (!pondId || !quantityKg) {
+  const feedQuantity = Number(quantityKg);
+  if (!pondId || !Number.isFinite(feedQuantity) || feedQuantity <= 0) {
     return res.status(400).json({ error: 'pondId and quantityKg are required' });
   }
 
-  if (req.userRole === 'WORKER') {
-    const pond = await prisma.pond.findUnique({ where: { id: pondId }, select: { assignedUserId: true } });
-    if (!pond || !workerCanAccessPond(pond.assignedUserId, req.userId)) return res.status(403).json({ error: 'Forbidden' });
-  }
+  const accessiblePond = await prisma.pond.findFirst({ where: { id: pondId, ...pondTenantWhere(req.tenantId || '') }, select: { assignedUserId: true } });
+  if (!accessiblePond || (req.userRole === 'WORKER' && !workerCanAccessPond(accessiblePond.assignedUserId, req.userId))) return res.status(403).json({ error: 'Forbidden' });
 
   let matchedInventoryItem = null as Awaited<ReturnType<typeof prisma.inventoryItem.findUnique>> | null;
   if (inventoryItemId) {
-    matchedInventoryItem = await prisma.inventoryItem.findUnique({ where: { id: inventoryItemId } });
+    matchedInventoryItem = await prisma.inventoryItem.findFirst({ where: { id: inventoryItemId, tenantId: req.tenantId } });
     if (matchedInventoryItem && !matchedInventoryItem.category.toLowerCase().includes('feed') && matchedInventoryItem.unit.toLowerCase() !== 'kg') {
       return res.status(400).json({ error: 'Selected inventory item is not feed stock.' });
     }
@@ -63,6 +64,7 @@ export async function createFeeding(req: AuthRequest, res: Response) {
     const feedLabel = (feedType || feedBrand || 'Pellet').toLowerCase();
     matchedInventoryItem = await prisma.inventoryItem.findFirst({
       where: {
+        tenantId: req.tenantId,
         OR: [
           { name: { contains: feedLabel, mode: 'insensitive' } },
           { category: { contains: 'feed', mode: 'insensitive' } },
@@ -72,53 +74,63 @@ export async function createFeeding(req: AuthRequest, res: Response) {
     });
   }
 
-  if (matchedInventoryItem && matchedInventoryItem.currentStock < quantityKg) {
-    return res.status(400).json({ error: `Not enough ${matchedInventoryItem.name} in stock for this feeding record.` });
-  }
   if (!matchedInventoryItem) {
     return res.status(400).json({ error: 'No feed stock is available for this feeding record.' });
   }
 
-  const feeding = await prisma.$transaction(async (tx) => {
-    const createdFeeding = await tx.feedingLog.create({
-      data: {
-        pondId,
-        workerId: req.userId || null,
-        feedBrand: feedBrand || matchedInventoryItem?.name || 'Standard Feed',
-        feedType: feedType || matchedInventoryItem?.name || 'Pellet',
-        feedSize: feedSize || '4mm',
-        quantityKg,
-        appetite: appetite ?? 0,
-        observation: observation || 'Routine feeding',
-        gpsLat: gpsLat ?? null,
-        gpsLng: gpsLng ?? null,
-      },
-      include: {
-        pond: true,
-        worker: { select: { id: true, name: true, email: true } },
-      },
-    });
+  let feedUnitCost: number | null = null;
+  let feeding;
+  try {
+    feeding = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${matchedInventoryItem.id}))::text AS locked`;
+      const currentItem = await tx.inventoryItem.findFirst({
+        where: { id: matchedInventoryItem!.id, tenantId: req.tenantId },
+        include: { transactions: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] } },
+      });
+      if (!currentItem) throw new Error('The selected feed item is no longer available.');
+      if (currentItem.currentStock < feedQuantity) throw new Error(`Not enough ${currentItem.name} in stock for this feeding record.`);
 
-    if (matchedInventoryItem && (matchedInventoryItem.category.toLowerCase().includes('feed') || matchedInventoryItem.unit.toLowerCase() === 'kg')) {
-      await tx.inventoryItem.update({
-        where: { id: matchedInventoryItem.id },
+      feedUnitCost = calculateWeightedAverageIssueCost(currentItem.transactions, feedQuantity);
+      const createdFeeding = await tx.feedingLog.create({
         data: {
-          currentStock: matchedInventoryItem.currentStock - quantityKg,
+          pondId,
+          workerId: req.userId || null,
+          feedBrand: feedBrand || currentItem.name || 'Standard Feed',
+          feedType: feedType || currentItem.name || 'Pellet',
+          feedSize: feedSize || '4mm',
+          quantityKg: feedQuantity,
+          appetite: appetite ?? 0,
+          observation: observation || 'Routine feeding',
+          gpsLat: gpsLat ?? null,
+          gpsLng: gpsLng ?? null,
+        },
+        include: {
+          pond: true,
+          worker: { select: { id: true, name: true, email: true } },
         },
       });
 
+      await tx.inventoryItem.update({
+        where: { id: currentItem.id },
+        data: { currentStock: currentItem.currentStock - feedQuantity },
+      });
       await tx.inventoryTransaction.create({
         data: {
-          itemId: matchedInventoryItem.id,
+          itemId: currentItem.id,
           pondId,
-          change: -quantityKg,
+          change: -feedQuantity,
+          unitCost: feedUnitCost,
           reason: 'Feed used',
         },
       });
+      return createdFeeding;
+    });
+  } catch (error) {
+    if (error instanceof Error && (error.message.startsWith('The selected feed item') || error.message.startsWith('Not enough'))) {
+      return res.status(400).json({ error: error.message });
     }
-
-    return createdFeeding;
-  });
+    throw error;
+  }
 
   const pond = await prisma.pond.findUnique({
     where: { id: pondId },
@@ -133,5 +145,11 @@ export async function createFeeding(req: AuthRequest, res: Response) {
     );
   }
 
-  res.status(201).json({ feeding });
+  res.status(201).json({
+    feeding,
+    ...(hasRequestPermission(req, 'INVENTORY_COST_VIEW') ? {
+      feedUnitCost,
+      feedCost: feedUnitCost == null ? null : feedUnitCost * feedQuantity,
+    } : {}),
+  });
 }

@@ -2,20 +2,21 @@ import { Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { AuthRequest } from '../middleware/auth';
 import { createNotificationForUser } from './notifications';
+import { pondTenantWhere } from '../lib/tenant';
 
 function workerCanAccessPond(assignedUserId: string | null | undefined, workerId?: string) {
   return !assignedUserId || assignedUserId === workerId;
 }
 
 export async function getMortality(req: AuthRequest, res: Response) {
-  const where = req.userRole === 'WORKER' ? {
+  const where = {
     pond: {
-      OR: [
-        { assignedUserId: req.userId },
-        { assignedUserId: null },
+      AND: [
+        pondTenantWhere(req.tenantId || ''),
+        ...(req.userRole === 'WORKER' ? [{ OR: [{ assignedUserId: req.userId }, { assignedUserId: null }] }] : []),
       ],
     },
-  } : {};
+  };
   const mortalityLogs = await prisma.mortalityLog.findMany({
     where,
     orderBy: { observedAt: 'desc' },
@@ -40,10 +41,8 @@ export async function createMortality(req: AuthRequest, res: Response) {
     return res.status(400).json({ error: 'pondId and numberDead are required' });
   }
 
-  if (req.userRole === 'WORKER') {
-    const pond = await prisma.pond.findUnique({ where: { id: pondId }, select: { assignedUserId: true } });
-    if (!pond || !workerCanAccessPond(pond.assignedUserId, req.userId)) return res.status(403).json({ error: 'Forbidden' });
-  }
+  const accessiblePond = await prisma.pond.findFirst({ where: { id: pondId, ...pondTenantWhere(req.tenantId || '') }, select: { assignedUserId: true } });
+  if (!accessiblePond || (req.userRole === 'WORKER' && !workerCanAccessPond(accessiblePond.assignedUserId, req.userId))) return res.status(403).json({ error: 'Forbidden' });
 
   // ensure pond exists
   const pondWithLogs = await prisma.pond.findUnique({ where: { id: pondId } });

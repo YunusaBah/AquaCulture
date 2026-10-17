@@ -2957,7 +2957,11 @@ button {
 .theme-toggle-btn {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  width: 44px;
+  min-width: 44px;
+  padding-right: 0;
+  padding-left: 0;
 }
   
 .notifications-wrap,
@@ -3361,7 +3365,7 @@ button {
   padding: 10px 12px;
   background: #fff;
   color: var(--ink);
-  cursor: pointer;
+  cursor: default;
 }
 
 .notification-item strong,

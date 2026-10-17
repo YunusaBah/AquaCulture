@@ -4,7 +4,6 @@ import {
   AlertTriangle,
   Bell,
   CalendarClock,
-  CheckCircle2,
   ClipboardList,
   Droplets,
   FileText,
@@ -15,6 +14,7 @@ import {
   Plus,
   Send,
   Sprout,
+  Settings,
   Sun,
   Trash2,
   TrendingDown,
@@ -28,6 +28,7 @@ import { hasPermission } from './lib/permissions';
 import { createPortal } from 'react-dom';
 import { AuthShell } from './components/AuthShell';
 import { AdminReports } from './components/AdminReports';
+import { SettingsPage } from './components/SettingsPage';
 import { PondRegistryTable, type PondQuickAction } from './components/PondRegistryTable';
 
 type CurrentUser = {
@@ -36,6 +37,10 @@ type CurrentUser = {
   email: string;
   name: string | null;
   role: 'OWNER' | 'WORKER';
+  profilePhoto?: string | null;
+  fontSize?: 'small' | 'medium' | 'large';
+  highContrast?: boolean;
+  permissions?: Record<string, boolean> | null;
 };
 
 type ChatMessage = {
@@ -102,6 +107,7 @@ const ownerNav = [
   { id: 'finance', label: 'Finance', icon: Wallet },
   { id: 'reports', label: 'Reports', icon: FileText },
   { id: 'inventory', label: 'Inventory', icon: Package },
+  { id: 'settings', label: 'Settings', icon: Settings },
 ];
 
 const workerNav = [
@@ -109,17 +115,30 @@ const workerNav = [
   { id: 'ponds', label: 'My Ponds', icon: Fish },
   { id: 'tasks', label: 'Tasks', icon: ClipboardList },
   { id: 'reports', label: 'Reports', icon: FileText },
+  { id: 'settings', label: 'Settings', icon: Settings },
 ];
 
 const viewerNav = [
   { id: 'command', label: 'Dashboard', icon: Activity },
   { id: 'ponds', label: 'Pond Reports', icon: Fish },
   { id: 'finance', label: 'Finance Reports', icon: Wallet },
+  { id: 'settings', label: 'Settings', icon: Settings },
 ];
 
 function formatDalasi(value: number) {
   const safe = Math.round(value || 0);
   return `${safe < 0 ? '-' : ''}D${Math.abs(safe).toLocaleString()}`;
+}
+
+function formatDateInput(value: Date) {
+  return value.toISOString().slice(0, 10);
+}
+
+function previousWeekMonday() {
+  const today = new Date();
+  const utcToday = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()));
+  utcToday.setUTCDate(utcToday.getUTCDate() - ((utcToday.getUTCDay() + 6) % 7) - 7);
+  return formatDateInput(utcToday);
 }
 
 function formatTwoDecimalPlaces(value: number) {
@@ -190,15 +209,6 @@ function App() {
     const stored = localStorage.getItem('aquaculture-user');
     return stored ? JSON.parse(stored) : null;
   });
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const [showRegisterForm, setShowRegisterForm] = useState(false);
-  const [registerName, setRegisterName] = useState('');
-  const [registerEmail, setRegisterEmail] = useState('');
-  const [registerPassword, setRegisterPassword] = useState('');
-  const [registerConfirmPassword, setRegisterConfirmPassword] = useState('');
-  const [registerCode, setRegisterCode] = useState('');
   const [workerForm, setWorkerForm] = useState({ fullName: '', email: '', password: '' });
   const [activeNav, setActiveNav] = useState(() => (currentUser?.role === 'OWNER' && window.location.pathname.startsWith('/admin/reports'))
     || (currentUser?.role === 'WORKER' && window.location.pathname.startsWith('/reports'))
@@ -206,6 +216,9 @@ function App() {
     : window.location.pathname === '/ponds' ? 'ponds' : 'command');
   const [reportDataLoading, setReportDataLoading] = useState(true);
   const [reportDataError, setReportDataError] = useState<string | null>(null);
+  const [productionCosting, setProductionCosting] = useState<any>(null);
+  const [productionCostingError, setProductionCostingError] = useState('');
+  const [costingWeekStart, setCostingWeekStart] = useState(previousWeekMonday);
   const [sidebarOpen, setSidebarOpen] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth > 1120));
   const [profileOpen, setProfileOpen] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -219,19 +232,6 @@ function App() {
   const inactivityTimerRef = useRef<number | null>(null);
   const touchListeningRef = useRef(false);
   const MOBILE_HIDE_BREAKPOINT = 900; // px
-
-  // auto-hide sidebar on small screens after period of inactivity
-  useEffect(() => {
-    function closeInventoryContext(event: Event) {
-      const target = event.target as HTMLElement | null;
-      if (!target) return;
-      if (target.closest('.inventory-card') || target.closest('.inventory-context-action')) return;
-      setInventoryContextId(null);
-    }
-
-    document.addEventListener('pointerdown', closeInventoryContext);
-    return () => document.removeEventListener('pointerdown', closeInventoryContext);
-  }, []);
 
   useEffect(() => {
     function clearTimer() {
@@ -312,10 +312,7 @@ function App() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [modalTask, setModalTask] = useState<any | null>(null);
-  const [isOnline, setIsOnline] = useState<boolean>(() => (typeof navigator === 'undefined' ? true : navigator.onLine));
-  const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [syncQueueOpen, setSyncQueueOpen] = useState(false);
   const [workerRoster, setWorkerRoster] = useState<any[]>([]);
   const [workerAccessModal, setWorkerAccessModal] = useState<{ open: boolean; worker?: any; action?: 'block' | 'unblock' } | null>(null);
   const [workerSearchTerm, setWorkerSearchTerm] = useState('');
@@ -324,28 +321,29 @@ function App() {
   const [revealedSwipeAction, setRevealedSwipeAction] = useState<{ type: 'finance' | 'worker' | 'inventory' | 'task' | 'pond'; id: string } | null>(null);
   const swipeDragRef = useRef<{ type: 'finance' | 'worker' | 'inventory' | 'task' | 'pond'; id: string; startX: number; moved: boolean } | null>(null);
   const swipeGuardRef = useRef(false);
+  const syncInProgressRef = useRef(false);
   const [adminPondQuickUpdateId, setAdminPondQuickUpdateId] = useState('');
   const [adminRestockQty, setAdminRestockQty] = useState('');
   const [expandedWorkerId, setExpandedWorkerId] = useState<string | null>(null);
   const [workerPasswords, setWorkerPasswords] = useState<Record<string, string>>({});
-  const [inventoryContextId, setInventoryContextId] = useState<string | null>(null);
-  const inventoryLongPressTimerRef = useRef<number | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatDraft, setChatDraft] = useState('');
   const [chatPreviewImage, setChatPreviewImage] = useState<string | null>(null);
+  const chatStorageKey = currentUser ? `${CHAT_STORAGE_KEY}:${currentUser.id}` : null;
+  const chatReadStorageKey = currentUser ? `${CHAT_READ_STORAGE_KEY}:${currentUser.id}` : null;
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => {
-    if (typeof window === 'undefined') return [];
+    if (typeof window === 'undefined' || !chatStorageKey) return [];
     try {
-      const stored = localStorage.getItem(CHAT_STORAGE_KEY);
+      const stored = localStorage.getItem(chatStorageKey);
       return stored ? JSON.parse(stored) : [];
     } catch {
       return [];
     }
   });
   const [chatLastReadAt, setChatLastReadAt] = useState<string | null>(() => {
-    if (typeof window === 'undefined') return null;
+    if (typeof window === 'undefined' || !chatReadStorageKey) return null;
     try {
-      return localStorage.getItem(CHAT_READ_STORAGE_KEY) || null;
+      return localStorage.getItem(chatReadStorageKey) || null;
     } catch {
       return null;
     }
@@ -358,16 +356,16 @@ function App() {
   const lastMentionedChatIdRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chatMessages));
+    if (typeof window !== 'undefined' && chatStorageKey) {
+      localStorage.setItem(chatStorageKey, JSON.stringify(chatMessages));
     }
-  }, [chatMessages]);
+  }, [chatMessages, chatStorageKey]);
 
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem(CHAT_READ_STORAGE_KEY, chatLastReadAt || '');
+    if (typeof window !== 'undefined' && chatReadStorageKey) {
+      localStorage.setItem(chatReadStorageKey, chatLastReadAt || '');
     }
-  }, [chatLastReadAt]);
+  }, [chatLastReadAt, chatReadStorageKey]);
 
   const normalizeChatMessage = useCallback((message: any): ChatMessage => ({
     id: message.id,
@@ -673,19 +671,6 @@ function App() {
     }
   }, [getAvailableFeedInventoryItems, getAvailableFeedSizes, pondLogForm.feedSize]);
 
-  useEffect(() => {
-    function handleInventoryContextDismiss(event: PointerEvent) {
-      const target = event.target as HTMLElement | null;
-      if (!target) return;
-      if (!inventoryContextId) return;
-      if (target.closest('.inventory-card') || target.closest('.inventory-context-action')) return;
-      setInventoryContextId(null);
-    }
-
-    document.addEventListener('pointerdown', handleInventoryContextDismiss);
-    return () => document.removeEventListener('pointerdown', handleInventoryContextDismiss);
-  }, [inventoryContextId]);
-
   // lightweight modal helper for harvest confirmation (awaitable)
   const [harvestModal, setHarvestModal] = useState<{ open: boolean; details?: any; resolver?: ((v: boolean) => void) | null }>({ open: false, details: undefined, resolver: null });
   function showHarvestConfirmation(details: any) {
@@ -727,6 +712,8 @@ function App() {
     unitPrice: '',
     amount: '',
     pondId: '',
+    coverageStart: '',
+    coverageEnd: '',
   });
   const [showFinanceForm, setShowFinanceForm] = useState(false);
   const [taskForm, setTaskForm] = useState({
@@ -741,22 +728,32 @@ function App() {
     unit: 'kg',
     currentStock: '',
     minStock: '',
+    unitCost: '',
     feedSize: '4mm',
   });
   const [showInventoryForm, setShowInventoryForm] = useState(false);
   const [restockItemId, setRestockItemId] = useState<string | null>(null);
   const [restockQuantity, setRestockQuantity] = useState('');
+  const [restockUnitCost, setRestockUnitCost] = useState('');
   const [inventoryAdjustment, setInventoryAdjustment] = useState({
     itemId: '',
     type: 'ADD',
     quantity: '',
+    unitCost: '',
     reason: 'Restock',
   });
 
   const isOwner = currentUser?.role === 'OWNER';
-  const canViewFinance = hasPermission(currentUser?.role, 'FINANCE_VIEW');
-  const canViewInventory = hasPermission(currentUser?.role, 'INVENTORY_VIEW');
-  const navItems = isOwner ? ownerNav : workerNav;
+  const canViewFinance = hasPermission(currentUser?.role, 'FINANCE_VIEW', currentUser?.permissions);
+  const canViewInventory = hasPermission(currentUser?.role, 'INVENTORY_VIEW', currentUser?.permissions);
+  const canViewInventoryCost = hasPermission(currentUser?.role, 'INVENTORY_COST_VIEW', currentUser?.permissions);
+  const navItems = isOwner ? ownerNav : workerNav.filter((item) => (
+    item.id === 'command'
+    || item.id === 'settings'
+    || (item.id === 'ponds' && hasPermission(currentUser?.role, 'POND_VIEW_ASSIGNED', currentUser?.permissions))
+    || (item.id === 'tasks' && hasPermission(currentUser?.role, 'TASK_VIEW_ASSIGNED', currentUser?.permissions))
+    || (item.id === 'reports' && hasPermission(currentUser?.role, 'REPORT_VIEW', currentUser?.permissions))
+  ));
   const [selectedAnalyticsMetric, setSelectedAnalyticsMetric] = useState<'health' | 'feed' | 'mortality' | 'profit' | 'ponds'>('health');
   const [selectedAnalyticsRange, setSelectedAnalyticsRange] = useState<'daily' | 'weekly' | 'monthly' | 'yearly'>('daily');
 
@@ -783,27 +780,26 @@ function App() {
   }, [activeNav, currentUser]);
 
   const navigateToSection = (sectionId: string) => {
-    if (sectionId === 'reports' && (isOwner || currentUser?.role === 'WORKER')) {
-      window.history.pushState({}, '', isOwner ? '/admin/reports' : '/reports');
-      window.dispatchEvent(new PopStateEvent('popstate'));
-    } else if (sectionId === 'ponds') {
-      window.history.pushState({}, '', '/ponds');
-    } else if (window.location.pathname.startsWith('/admin/')) {
-      window.history.pushState({}, '', '/');
-    }
+    const route = sectionId === 'reports' && (isOwner || currentUser?.role === 'WORKER')
+      ? isOwner ? '/admin/reports' : '/reports'
+      : sectionId === 'ponds' ? '/ponds' : '/';
+    if (window.location.pathname !== route) window.history.pushState({}, '', route);
+    if (sectionId === 'reports') window.dispatchEvent(new PopStateEvent('popstate'));
     setActiveNav(sectionId);
     window.scrollTo({ top: 0, behavior: 'smooth' });
     if (window.innerWidth <= 1120) setSidebarOpen(false);
   };
 
+  const syncQueueStorageKey = currentUser ? `aquaculture-sync-queue:${currentUser.id}` : null;
   const readQueuedSyncEntries = useCallback(() => {
-    if (typeof window === 'undefined') return [] as Array<Record<string, any>>;
+    if (typeof window === 'undefined' || !syncQueueStorageKey) return [] as Array<Record<string, any>>;
     try {
-      return JSON.parse(localStorage.getItem('aquaculture-sync-queue') || '[]');
+      const entries = JSON.parse(localStorage.getItem(syncQueueStorageKey) || '[]');
+      return Array.isArray(entries) ? entries : [];
     } catch {
       return [] as Array<Record<string, any>>;
     }
-  }, []);
+  }, [syncQueueStorageKey]);
 
   // auto-dismiss toasts after a short delay so messages don't stick
   useEffect(() => {
@@ -813,7 +809,7 @@ function App() {
   }, [toastMessage]);
 
   const queueOfflineSyncEntry = useCallback((action: string, payload: Record<string, any>, tableName: string, recordId?: string) => {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined' || !syncQueueStorageKey) return;
     const entries = readQueuedSyncEntries();
     const nextEntry = {
       id: typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -824,9 +820,8 @@ function App() {
       deviceId: 'browser-web',
       createdAt: new Date().toISOString(),
     };
-    localStorage.setItem('aquaculture-sync-queue', JSON.stringify([...entries, nextEntry]));
-    setPendingSyncCount([...entries, nextEntry].length);
-  }, [readQueuedSyncEntries]);
+    localStorage.setItem(syncQueueStorageKey, JSON.stringify([...entries, nextEntry]));
+  }, [readQueuedSyncEntries, syncQueueStorageKey]);
 
   const handleChatDraftChange = (value: string) => {
     setChatDraft(value);
@@ -1006,8 +1001,15 @@ function App() {
     setReportDataLoading(true);
     setReportDataError(null);
     const headers = { Authorization: token ? 'Bearer ' + token : '' };
-    let responses: Response[];
+    let responses: Array<Response | null>;
     try {
+      const costingRequest = canViewFinance
+        ? fetch(`${apiBaseUrl}/finance/costing?weekStart=${encodeURIComponent(costingWeekStart)}`, { headers })
+            .catch((error) => {
+              console.error('Production costs could not be loaded', error);
+              return null;
+            })
+        : Promise.resolve(null);
       responses = await Promise.all([
         fetch(`${apiBaseUrl}/farms`, { headers }),
         fetch(`${apiBaseUrl}/ponds`, { headers }),
@@ -1020,6 +1022,7 @@ function App() {
         fetch(`${apiBaseUrl}/finance`, { headers }),
         fetch(`${apiBaseUrl}/notifications`, { headers }),
         fetch(`${apiBaseUrl}/auth/me`, { headers }),
+        costingRequest,
       ]);
     } catch (loadError) {
       console.error('Failed to load report data', loadError);
@@ -1027,14 +1030,17 @@ function App() {
       setReportDataLoading(false);
       return;
     }
-    const [farmsRes, pondsRes, feedingsRes, waterRes, mortalityRes, harvestsRes, inventoryRes, tasksRes, financeRes, notificationsRes, currentUserRes] = responses;
+    const [farmsRes, pondsRes, feedingsRes, waterRes, mortalityRes, harvestsRes, inventoryRes, tasksRes, financeRes, notificationsRes, currentUserRes, costingRes] = responses as [
+      Response, Response, Response, Response, Response, Response, Response, Response, Response, Response, Response, Response | null,
+    ];
 
     if (currentUserRes.status === 401) {
       localStorage.removeItem('aquaculture-token');
       localStorage.removeItem('aquaculture-user');
       setToken(null);
       setCurrentUser(null);
-      setError('Your session expired. Please sign in again.');
+      setChatMessages([]);
+      setChatLastReadAt(null);
       setReportDataLoading(false);
       return;
     }
@@ -1066,6 +1072,17 @@ function App() {
       next.financeRecords = finance.records || [];
     }
     if (notificationsRes.ok) next.notifications = (await notificationsRes.json()).notifications || [];
+    if (costingRes?.ok) {
+      setProductionCosting(await costingRes.json());
+      setProductionCostingError('');
+    } else if (canViewFinance) {
+      const body = await costingRes?.json().catch(() => ({}));
+      setProductionCosting(null);
+      setProductionCostingError(body?.error || 'Production costs could not be loaded.');
+    } else {
+      setProductionCosting(null);
+      setProductionCostingError('');
+    }
     if (currentUserRes.ok) {
       const profile = await currentUserRes.json().catch(() => ({}));
       if (profile.user?.id) {
@@ -1079,7 +1096,7 @@ function App() {
     }
     setData(next);
     setReportDataLoading(false);
-  }, [apiBaseUrl, currentUser?.role, token]);
+  }, [apiBaseUrl, canViewFinance, costingWeekStart, currentUser?.role, token]);
 
   const loadWorkerRoster = useCallback(async () => {
     if (!token || !isOwner) {
@@ -1110,45 +1127,65 @@ function App() {
   }, [isOwner, loadData, loadWorkerRoster, token]);
 
   const flushOfflineSyncQueue = useCallback(async () => {
-    if (!token || !navigator.onLine) return;
+    if (!token || !navigator.onLine || syncInProgressRef.current) return;
     const entries = readQueuedSyncEntries();
-    if (!entries.length) {
-      setPendingSyncCount(0);
-      return;
-    }
+    const activeEntries = entries.filter((entry: Record<string, any>) => !entry.syncError);
+    if (!activeEntries.length) return;
 
-    const response = await fetch(`${apiBaseUrl}/sync/queue`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-          Authorization: token ? 'Bearer ' + token : '',
-      },
-      body: JSON.stringify({
-        items: entries.map((entry: Record<string, any>) => ({
-          action: entry.action,
-          tableName: entry.tableName,
-          recordId: entry.recordId,
-          payload: entry.payload,
-          deviceId: entry.deviceId,
-        })),
-      }),
-    });
-
-    if (response.ok) {
-      const flushResponse = await fetch(`${apiBaseUrl}/sync/flush`, {
+    syncInProgressRef.current = true;
+    try {
+      const response = await fetch(`${apiBaseUrl}/sync/queue`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: token ? 'Bearer ' + token : '',
         },
+        body: JSON.stringify({
+          items: activeEntries.map((entry: Record<string, any>) => ({
+            clientId: entry.id,
+            action: entry.action,
+            tableName: entry.tableName,
+            recordId: entry.recordId,
+            payload: entry.payload,
+            deviceId: entry.deviceId,
+          })),
+        }),
       });
-      if (flushResponse.ok) {
-        localStorage.removeItem('aquaculture-sync-queue');
-        setPendingSyncCount(0);
-        await refreshDashboard();
+      const queued = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(queued.error || 'Unable to queue offline changes.');
+
+      const flushResponse = await fetch(`${apiBaseUrl}/sync/flush`, {
+        method: 'POST',
+        headers: { Authorization: token ? 'Bearer ' + token : '' },
+      });
+      const flushed = await flushResponse.json().catch(() => ({}));
+      if (!flushResponse.ok) throw new Error(flushed.error || 'Unable to sync offline changes.');
+
+      const results = new Map<string, { status: string; error?: string }>();
+      for (const item of queued.items || []) {
+        if (item.clientId && item.status !== 'PENDING') results.set(item.clientId, { status: item.status });
       }
+      for (const item of flushed.items || []) {
+        if (item.clientId) results.set(item.clientId, { status: item.status, error: item.error });
+      }
+
+      const remaining = readQueuedSyncEntries().flatMap((entry: Record<string, any>) => {
+        const result = results.get(entry.id);
+        if (result?.status === 'SYNCHRONIZED') return [];
+        if (result?.status === 'REJECTED') {
+          return [{ ...entry, syncError: result.error || 'This change was rejected by the server.' }];
+        }
+        return [entry];
+      });
+      if (syncQueueStorageKey) {
+        if (remaining.length) localStorage.setItem(syncQueueStorageKey, JSON.stringify(remaining));
+        else localStorage.removeItem(syncQueueStorageKey);
+      }
+      await refreshDashboard().catch((error) => console.error('Synced data could not be refreshed', error));
+    } finally {
+      syncInProgressRef.current = false;
     }
-  }, [apiBaseUrl, readQueuedSyncEntries, refreshDashboard, token]);
+  }, [apiBaseUrl, readQueuedSyncEntries, refreshDashboard, syncQueueStorageKey, token]);
 
   useEffect(() => {
     refreshDashboard().catch((err) => console.error('Failed to load AquaCulture data', err));
@@ -1181,6 +1218,11 @@ function App() {
   }, [theme]);
 
   useEffect(() => {
+    document.documentElement.dataset.fontSize = currentUser?.fontSize || 'medium';
+    document.documentElement.dataset.highContrast = String(Boolean(currentUser?.highContrast));
+  }, [currentUser?.fontSize, currentUser?.highContrast]);
+
+  useEffect(() => {
     if (!token) return;
     let active = true;
     const syncTheme = async () => {
@@ -1198,15 +1240,12 @@ function App() {
       }
     };
     void syncTheme();
-    const interval = window.setInterval(() => void syncTheme(), 5000);
     return () => {
       active = false;
-      window.clearInterval(interval);
     };
   }, [apiBaseUrl, token]);
 
-  const handleThemeToggle = async () => {
-    const nextTheme = theme === 'dark' ? 'light' : 'dark';
+  const handleThemeChange = async (nextTheme: 'light' | 'dark') => {
     const previousTheme = theme;
     setTheme(nextTheme);
     try {
@@ -1222,9 +1261,11 @@ function App() {
     } catch (error) {
       setTheme(previousTheme);
       console.error('Failed to update application theme', error);
-      setToastMessage('Unable to update the shared theme.');
+      setToastMessage('Unable to update your theme.');
     }
   };
+
+  const handleThemeToggle = () => handleThemeChange(theme === 'dark' ? 'light' : 'dark');
 
   useEffect(() => {
     const handleResize = () => {
@@ -1236,31 +1277,26 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const syncPendingQueue = async () => {
-      if (!token) return;
-      setPendingSyncCount(readQueuedSyncEntries().length);
-      if (navigator.onLine) {
-        await flushOfflineSyncQueue();
-      }
+    if (!token) return undefined;
+    const syncPendingQueue = () => {
+      if (!navigator.onLine) return;
+      void flushOfflineSyncQueue().catch((error) => {
+        console.warn('Automatic sync will retry.', error);
+      });
     };
-
     const handleOnlineStatus = () => {
-      setIsOnline(navigator.onLine);
-      void syncPendingQueue();
+      if (navigator.onLine) syncPendingQueue();
     };
-
-    setIsOnline(navigator.onLine);
-    setPendingSyncCount(readQueuedSyncEntries().length);
     window.addEventListener('online', handleOnlineStatus);
     window.addEventListener('offline', handleOnlineStatus);
-
-    void syncPendingQueue();
-
+    const retryInterval = window.setInterval(syncPendingQueue, 30000);
+    syncPendingQueue();
     return () => {
+      window.clearInterval(retryInterval);
       window.removeEventListener('online', handleOnlineStatus);
       window.removeEventListener('offline', handleOnlineStatus);
     };
-  }, [flushOfflineSyncQueue, readQueuedSyncEntries, token]);
+  }, [flushOfflineSyncQueue, token]);
 
   async function submitPondUpdateForPond(pondId: string) {
     if (!token || !pondId) return;
@@ -1403,25 +1439,14 @@ function App() {
         queueOfflineSyncEntry('pond_update', payload, 'pond_daily_log', pondId);
       } else {
         if (Number(pondLogForm.avgWeightGrams) > 0) {
-          try {
-            const qRes = await fetch(`${apiBaseUrl}/sync/queue`, { method: 'POST', headers, body: JSON.stringify({ items: [{ action: 'pond_update', payload: { pondId, avgWeightGrams: Number(pondLogForm.avgWeightGrams), growthComment: pondLogForm.growthComment || undefined } }] }) });
-            if (qRes.ok) {
-              const fRes = await fetch(`${apiBaseUrl}/sync/flush`, { method: 'POST', headers });
-              if (!fRes.ok) {
-                queueOfflineSyncEntry('pond_update', payload, 'pond_daily_log', pondId);
-                resetPondLogForm();
-                return;
-              }
-            } else {
-              queueOfflineSyncEntry('pond_update', payload, 'pond_daily_log', pondId);
-              resetPondLogForm();
-              return;
-            }
-          } catch (err) {
-            queueOfflineSyncEntry('pond_update', payload, 'pond_daily_log', pondId);
-            resetPondLogForm();
-            return;
-          }
+          queueOfflineSyncEntry('pond_update', {
+            pondId,
+            avgWeightGrams: Number(pondLogForm.avgWeightGrams),
+            growthComment: pondLogForm.growthComment || undefined,
+          }, 'pond_daily_log', pondId);
+          void flushOfflineSyncQueue().catch((error) => {
+            console.warn('Growth observation will sync automatically.', error);
+          });
         }
 
         resetPondLogForm();
@@ -1467,10 +1492,7 @@ function App() {
         password: worker.password || workerPasswords[worker.id || worker.email] || 'Assigned password',
       }));
 
-    return deduped.length > 0 ? deduped : [
-      { id: 'yunusa-worker', email: 'yunusa@aquaculture.localapp', name: 'Yunusa', role: { name: 'WORKER' }, blocked: false, createdAt: new Date().toISOString(), password: 'Assigned password' },
-      { id: 'kebba-worker', email: 'kebba@aquaculture.localapp', name: 'Kebba', role: { name: 'WORKER' }, blocked: false, createdAt: new Date().toISOString(), password: 'Assigned password' },
-    ];
+    return deduped;
   }, [data.farms, workerPasswords, workerRoster]);
 
   const allChatUsers = useMemo(() => {
@@ -1917,74 +1939,6 @@ function App() {
     };
   }, [data, isOwner, selectedAnalyticsMetric, selectedAnalyticsRange]);
 
-
-  async function handleLogin(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setLoading(true);
-    setError('');
-    try {
-      const response = await fetch(`${apiBaseUrl}/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok || !body.token) throw new Error(body.error || 'Unable to sign in');
-      localStorage.setItem('aquaculture-token', body.token);
-      localStorage.setItem('aquaculture-user', JSON.stringify(body.user));
-      setToken(body.token);
-      setCurrentUser(body.user);
-      setActiveNav('command');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to sign in');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleOwnerRegister(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setLoading(true);
-    setError('');
-
-    if (!registerName.trim() || !registerEmail.trim() || !registerPassword.trim() || !registerCode.trim()) {
-      setError('Name, email, password, and admin code are required.');
-      setLoading(false);
-      return;
-    }
-    if (registerPassword !== registerConfirmPassword) {
-      setError('Passwords do not match.');
-      setLoading(false);
-      return;
-    }
-
-    try {
-      const response = await fetch(`${apiBaseUrl}/auth/register`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: registerName.trim(),
-          email: registerEmail.trim().toLowerCase(),
-          password: registerPassword,
-          code: registerCode.trim().toUpperCase(),
-        }),
-      });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok || !body.token) {
-        throw new Error(body.error || 'Admin registration failed');
-      }
-      localStorage.setItem('aquaculture-token', body.token);
-      localStorage.setItem('aquaculture-user', JSON.stringify(body.user));
-      setToken(body.token);
-      setCurrentUser(body.user);
-      setShowRegisterForm(false);
-      setActiveNav('command');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Admin registration failed');
-    } finally {
-      setLoading(false);
-    }
-  }
 
   async function openPond(pondId: string) {
     if (!token) return;
@@ -2551,6 +2505,10 @@ function App() {
       setToastMessage('Amount must be greater than zero');
       return;
     }
+    if ((financeForm.coverageStart && !financeForm.coverageEnd) || (!financeForm.coverageStart && financeForm.coverageEnd)) {
+      setToastMessage('Enter both expense coverage dates, or leave both blank for a one-day cost.');
+      return;
+    }
 
     const payload = {
       type: financeForm.type,
@@ -2560,12 +2518,13 @@ function App() {
       unitPrice,
       amount,
       pondId: financeForm.pondId || undefined,
-      recordedAt: new Date().toISOString(),
+      coverageStart: financeForm.coverageStart || undefined,
+      coverageEnd: financeForm.coverageEnd || undefined,
     };
 
     if (!navigator.onLine) {
       queueOfflineSyncEntry('finance_record_create', payload, 'finance_record');
-      setFinanceForm({ type: 'RUNNING_COST', category: '', quantity: '', unit: 'kg', unitPrice: '', amount: '', pondId: '' });
+      setFinanceForm({ type: 'RUNNING_COST', category: '', quantity: '', unit: 'kg', unitPrice: '', amount: '', pondId: '', coverageStart: '', coverageEnd: '' });
       setShowFinanceForm(false);
       return;
     }
@@ -2576,7 +2535,7 @@ function App() {
       body: JSON.stringify(payload),
     });
     if (response.ok) {
-      setFinanceForm({ type: 'RUNNING_COST', category: '', quantity: '', unit: 'kg', unitPrice: '', amount: '', pondId: '' });
+      setFinanceForm({ type: 'RUNNING_COST', category: '', quantity: '', unit: 'kg', unitPrice: '', amount: '', pondId: '', coverageStart: '', coverageEnd: '' });
       setShowFinanceForm(false);
       await refreshDashboard();
     } else {
@@ -2603,12 +2562,16 @@ function App() {
         unit: inventoryForm.unit,
         currentStock: Number(inventoryForm.currentStock) || 0,
         minStock: Number(inventoryForm.minStock) || 0,
+        unitCost: inventoryForm.unitCost === '' ? undefined : Number(inventoryForm.unitCost),
       }),
     });
     if (response.ok) {
-      setInventoryForm({ category: '', unit: 'kg', currentStock: '', minStock: '', feedSize: '4mm' });
+      setInventoryForm({ category: '', unit: 'kg', currentStock: '', minStock: '', unitCost: '', feedSize: '4mm' });
       setShowInventoryForm(false);
       await refreshDashboard();
+    } else {
+      const body = await response.json().catch(() => ({}));
+      setToastMessage(body.error || 'Inventory item could not be created.');
     }
   }
 
@@ -2622,18 +2585,24 @@ function App() {
     }
 
     const delta = inventoryAdjustment.type === 'USE' ? -Math.abs(change) : Math.abs(change);
+    const unitCost = Number(inventoryAdjustment.unitCost);
+    if (delta > 0 && (inventoryAdjustment.unitCost === '' || !Number.isFinite(unitCost) || unitCost < 0)) {
+      setToastMessage('Enter a valid purchase cost per unit when adding stock.');
+      return;
+    }
     const response = await fetch(`${apiBaseUrl}/inventory/adjust`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' },
       body: JSON.stringify({
         itemId: inventoryAdjustment.itemId,
         change: delta,
+        unitCost: delta > 0 ? unitCost : undefined,
         reason: inventoryAdjustment.reason || (delta > 0 ? 'Stock restocked' : 'Stock issued'),
       }),
     });
 
     if (response.ok) {
-      setInventoryAdjustment({ itemId: '', type: 'ADD', quantity: '', reason: 'Restock' });
+      setInventoryAdjustment({ itemId: '', type: 'ADD', quantity: '', unitCost: '', reason: 'Restock' });
       await refreshDashboard();
     }
   }
@@ -2645,16 +2614,22 @@ function App() {
       setToastMessage('Enter a valid positive quantity');
       return;
     }
+    const unitCost = Number(restockUnitCost);
+    if (restockUnitCost === '' || !Number.isFinite(unitCost) || unitCost < 0) {
+      setToastMessage('Enter the purchase cost per unit for this stock.');
+      return;
+    }
 
     const response = await fetch(`${apiBaseUrl}/inventory/adjust`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : '' },
-      body: JSON.stringify({ itemId, change: quantity, reason: 'Restock' }),
+      body: JSON.stringify({ itemId, change: quantity, unitCost, reason: 'Restock' }),
     });
 
     if (response.ok) {
       setRestockItemId(null);
       setRestockQuantity('');
+      setRestockUnitCost('');
       setToastMessage('Stock restocked');
       await refreshDashboard();
     } else {
@@ -2845,13 +2820,6 @@ function App() {
     }
   }
 
-  function clearInventoryLongPress() {
-    if (inventoryLongPressTimerRef.current) {
-      window.clearTimeout(inventoryLongPressTimerRef.current);
-      inventoryLongPressTimerRef.current = null;
-    }
-  }
-
   async function handleCreateTask(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!token || !isOwner || !taskForm.assigneeId) return;
@@ -2923,48 +2891,14 @@ function App() {
 
   if (!token) {
     return (
-      <main className="auth-shell">
-        <section className="auth-panel">
-          <div className="brand-lockup">
-            <span className="brand-mark">AS</span>
-            <div>
-              <p className="eyebrow">Smart Aquaculture. Smarter Decisions.</p>
-              <h1>AquaCulture</h1>
-            </div>
-          </div>
-
-          {showRegisterForm ? (
-            <>
-              <div className="auth-register-banner">
-                <span>Admin code required for registration</span>
-              </div>
-              <form className="auth-form" onSubmit={handleOwnerRegister}>
-                <h2>Create admin account</h2>
-                  <label>Full name<input value={registerName} type="text" onChange={(event) => setRegisterName(event.target.value)} required /></label>
-                  <label>Email<input value={registerEmail} type="email" onChange={(event) => setRegisterEmail(event.target.value)} required /></label>
-                  <label>Password<input value={registerPassword} type="password" onChange={(event) => setRegisterPassword(event.target.value)} required /></label>
-                  <label>Confirm password<input value={registerConfirmPassword} type="password" onChange={(event) => setRegisterConfirmPassword(event.target.value)} required /></label>
-                  <label>Admin code<input value={registerCode} type="text" onChange={(event) => setRegisterCode(event.target.value.toUpperCase())} placeholder="ADMIN2024" required /></label>
-                  {error ? <p className="form-error">{error}</p> : null}
-                  <button className="primary-btn" type="submit" disabled={loading}>{loading ? 'Creating account...' : 'Register admin'}</button>
-                  <p className="auth-footer-link">
-                    <button type="button" className="text-link" onClick={() => { setShowRegisterForm(false); setError(''); }}>Back to login</button>
-                  </p>
-                </form>
-            </>
-          ) : (
-            <form className="auth-form" onSubmit={handleLogin}>
-                <label>Email<input value={email} type="email" onChange={(event) => setEmail(event.target.value)} /></label>
-                <label>Password<input value={password} type="password" onChange={(event) => setPassword(event.target.value)} /></label>
-                {error ? <p className="form-error">{error}</p> : null}
-                <button className="primary-btn" type="submit" disabled={loading}>{loading ? 'Signing in...' : 'Sign in'}</button>
-                <p className="auth-footer-link">
-                  <button type="button" className="text-link" onClick={() => { setShowRegisterForm(true); setError(''); }}>Register as admin</button>
-                </p>
-            </form>
-          )}
-        </section>
-      </main>
+      <AuthShell
+        apiBaseUrl={apiBaseUrl}
+        onLoginSuccess={(nextToken, user) => {
+          setToken(nextToken);
+          setCurrentUser(user);
+          setActiveNav('command');
+        }}
+      />
     );
   }
 
@@ -3094,8 +3028,8 @@ function App() {
     );
   }
 
-  const overlayVisible = notificationsOpen || syncQueueOpen;
-  const dashboardOverlayOpen = notificationsOpen || syncQueueOpen;
+  const overlayVisible = notificationsOpen;
+  const dashboardOverlayOpen = notificationsOpen;
   const showRecentUpdatesPanel = !dashboardOverlayOpen;
 
   return (
@@ -3103,7 +3037,7 @@ function App() {
       {typeof document !== 'undefined' && (
         createPortal(
           overlayVisible ? (
-            <div className="global-veil visible" onClick={() => { setNotificationsOpen(false); setSyncQueueOpen(false); }} />
+            <div className="global-veil visible" onClick={() => setNotificationsOpen(false)} />
           ) : (
             <div className="global-veil" />
           ),
@@ -3148,37 +3082,6 @@ function App() {
           </div>,
           document.body
         )
-      ) : null}
-
-      {typeof document !== 'undefined' && syncQueueOpen ? (
-       createPortal(
-         <div className="sync-panel" role="dialog" aria-modal="true">
-           <div className="notification-panel-header">
-             <strong>Sync queue</strong>
-             <button type="button" className="secondary-btn" onClick={() => setSyncQueueOpen(false)}>Close</button>
-           </div>
-           <div className="sync-panel-body">
-             {(() => {
-               const entries = readQueuedSyncEntries();
-               if (!entries.length) return <p className="empty-copy">No pending actions right now.</p>;
-               return entries.slice(0, 8).map((item: Record<string, any>) => (
-                 <div key={item.id} className="sync-item">
-                   <strong>{item.action}</strong>
-                   <span>{item.tableName}</span>
-                   <small>{new Date(item.createdAt).toLocaleString()}</small>
-                 </div>
-               ));
-             })()}
-           </div>
-           <div className="modal-actions compact-actions">
-             <button type="button" className="secondary-btn" onClick={() => setSyncQueueOpen(false)}>Close</button>
-             <button type="button" className="primary-btn" onClick={async () => { setSyncQueueOpen(false); if (navigator.onLine) { await flushOfflineSyncQueue(); } else { setToastMessage('You are offline. Actions will sync automatically when online again.'); } }}>
-               {isOnline ? 'Sync now' : 'Queue waiting'}
-             </button>
-           </div>
-         </div>,
-         document.body
-       )
       ) : null}
 
       {harvestModal.open ? (
@@ -3303,7 +3206,9 @@ function App() {
       <aside className={sidebarOpen ? 'sidebar open' : 'sidebar'}>
       <div className="brand-lockup">
         <button className="brand-mark profile-btn" aria-label="Profile" onClick={(e) => { e.stopPropagation(); setProfileOpen((v) => !v); }}>
-          {(currentUser?.name || 'AS').split(' ').map((p) => p.charAt(0)).slice(0,2).join('').toUpperCase()}
+          {currentUser?.profilePhoto
+            ? <img src={currentUser.profilePhoto} alt="" />
+            : (currentUser?.name || 'AS').split(' ').map((p) => p.charAt(0)).slice(0,2).join('').toUpperCase()}
         </button>
         <div>
           <p className="eyebrow">{isOwner ? 'Admin control' : 'User workspace'}</p>
@@ -3324,13 +3229,6 @@ function App() {
         ))}
       </nav>
 
-      <div className="sync-card">
-          <CheckCircle2 size={19} />
-          <div>
-            <strong>{isOwner ? 'Admin permissions' : 'User permissions'}</strong>
-            <span>{isOwner ? 'Can create ponds, finance records, and tasks' : 'Assigned ponds only. No pond creation.'}</span>
-          </div>
-        </div>
       </aside>
 
       {/* profile panel portal */}
@@ -3339,7 +3237,9 @@ function App() {
           <div className="profile-panel" role="dialog" aria-modal="false" onClick={() => setProfileOpen(false)}>
             <div className="profile-card" onClick={(e) => e.stopPropagation()}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-       <div className="brand-mark" style={{ width: 56, height: 56, borderRadius: 12, display: 'grid', placeItems: 'center' }}>{(currentUser?.name || 'AS').split(' ').map((p) => p.charAt(0)).slice(0,2).join('').toUpperCase()}</div>
+       <div className="brand-mark" style={{ width: 56, height: 56, borderRadius: 12, display: 'grid', placeItems: 'center', overflow: 'hidden' }}>
+         {currentUser?.profilePhoto ? <img src={currentUser.profilePhoto} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : (currentUser?.name || 'AS').split(' ').map((p) => p.charAt(0)).slice(0,2).join('').toUpperCase()}
+       </div>
        <div>
          <strong>{currentUser?.name || currentUser?.email || 'User'}</strong>
          <div style={{ color: 'var(--muted)', fontSize: 13 }}>{currentUser?.email}</div>
@@ -3347,17 +3247,14 @@ function App() {
               </div>
 
               <div style={{ marginTop: 12, display: 'grid', gap: 8 }}>
-       <button className="secondary-btn" onClick={() => { setChangePasswordOpen(true); setProfileOpen(false); }}>Change password</button>
+       <button className="secondary-btn" onClick={() => { navigateToSection('settings'); setProfileOpen(false); }}>Settings &amp; password</button>
        <button className="secondary-btn" onClick={() => {
          localStorage.removeItem('aquaculture-token');
          localStorage.removeItem('aquaculture-user');
-         localStorage.removeItem('aquaculture-sync-queue');
          setToken(null);
          setCurrentUser(null);
-         setEmail('');
-         setPassword('');
-         setError('');
-         setShowRegisterForm(false);
+         setChatMessages([]);
+         setChatLastReadAt(null);
        }}>Logout</button>
               </div>
             </div>
@@ -3532,24 +3429,6 @@ function App() {
             </div>
           </div>
           <div className="topbar-actions">
-            <div className="sync-status-wrap">
-              <button
-                type="button"
-                className={isOnline ? 'sync-status online' : 'sync-status offline'}
-                onClick={() => {
-                  setSyncQueueOpen((value) => {
-                    const next = !value;
-                    if (next) setNotificationsOpen(false);
-                    return next;
-                  });
-                }}
-                aria-label="Pending sync actions"
-              >
-                <span className="sync-dot" />
-                {isOnline ? 'Online' : 'Offline'} · {pendingSyncCount} pending
-              </button>
-              {/* sync-panel is portaled to document.body to avoid stacking/context clipping */}
-            </div>
             <div className="notifications-wrap">
               <button
                 type="button"
@@ -3559,7 +3438,6 @@ function App() {
                   const opening = !notificationsOpen;
                   setNotificationsOpen((value) => {
                     const next = !value;
-                    if (next) setSyncQueueOpen(false);
                     return next;
                   });
                   if (opening) {
@@ -3573,20 +3451,16 @@ function App() {
                 <span>{data.notifications.filter((item) => !item.read).length}</span>
               </button>
             </div>
-            <button type="button" className="secondary-btn theme-toggle-btn" aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} onClick={() => void handleThemeToggle()}>
+            <button type="button" className="secondary-btn theme-toggle-btn" aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} onClick={() => void handleThemeToggle()}>
               {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-              {theme === 'dark' ? 'Light' : 'Dark'}
             </button>
             <button className="secondary-btn" onClick={() => {
               localStorage.removeItem('aquaculture-token');
               localStorage.removeItem('aquaculture-user');
-              localStorage.removeItem('aquaculture-sync-queue');
               setToken(null);
               setCurrentUser(null);
-              setEmail('');
-              setPassword('');
-              setError('');
-              setShowRegisterForm(false);
+              setChatMessages([]);
+              setChatLastReadAt(null);
             }}>Log out</button>
           </div>
         </header>
@@ -3753,14 +3627,54 @@ function App() {
         ) : null}
 
         {activeNav === 'reports' && (isOwner || currentUser?.role === 'WORKER') ? (
-          <AdminReports
-            data={data}
-            users={[...workerRoster, ...(currentUser ? [currentUser] : [])]}
-            loading={reportDataLoading}
-            error={reportDataError}
-            isAdmin={isOwner}
-            currentUser={currentUser}
-          />
+          <>
+            <AdminReports
+              data={data}
+              users={[...workerRoster, ...(currentUser ? [currentUser] : [])]}
+              loading={reportDataLoading}
+              error={reportDataError}
+              isAdmin={isOwner}
+              currentUser={currentUser}
+            />
+            {canViewFinance ? (
+              <section className="production-costing-section report-costing-section">
+                <Panel eyebrow="Weekly production cost report" title="Pond cost comparison">
+                  <div className="production-costing-toolbar">
+                    <label>Week starting (Monday)
+                      <input type="date" value={costingWeekStart} onChange={(event) => setCostingWeekStart(event.target.value)} />
+                    </label>
+                    {productionCosting?.weekStart ? <span>{new Date(productionCosting.weekStart).toLocaleDateString()} – {new Date(productionCosting.weekEnd).toLocaleDateString()}</span> : null}
+                  </div>
+                  {productionCostingError ? <p className="settings-error" role="alert">{productionCostingError}</p> : null}
+                  {productionCosting ? (
+                    <div className="finance-table-wrap">
+                      <table className="finance-table production-costing-table">
+                        <thead><tr><th>Pond</th><th>Feed</th><th>Running</th><th>Fixed</th><th>Other inventory</th><th>Week total</th><th>Week sales</th><th>Week net</th><th>Cycle total</th><th>Cycle net</th><th>Break-even / kg</th><th>Break-even / fish</th></tr></thead>
+                        <tbody>{productionCosting.ponds.map((pondCost: any) => (
+                          <tr key={pondCost.pondId}>
+                            <td>Pond {pondCost.number} · {pondCost.species}</td>
+                            <td>{formatDalasi(pondCost.weekly.feedCost)}</td>
+                            <td>{formatDalasi(pondCost.weekly.runningCosts)}</td>
+                            <td>{formatDalasi(pondCost.weekly.fixedCosts)}</td>
+                            <td>{formatDalasi(pondCost.weekly.otherDirectCosts)}</td>
+                            <td><strong>{formatDalasi(pondCost.weekly.totalCost)}</strong></td>
+                            <td>{formatDalasi(pondCost.weekly.sales)}</td>
+                            <td>{formatDalasi(pondCost.weekly.profitLoss)}</td>
+                            <td><strong>{formatDalasi(pondCost.cycle.totalCost)}</strong></td>
+                            <td>{formatDalasi(pondCost.cycle.profitLoss)}</td>
+                            <td>{pondCost.cycle.breakEvenPerKg == null ? 'Provisional' : formatDalasi(pondCost.cycle.breakEvenPerKg)}</td>
+                            <td>{pondCost.cycle.breakEvenPerFish == null ? 'Provisional' : formatDalasi(pondCost.cycle.breakEvenPerFish)}</td>
+                          </tr>
+                        ))}</tbody>
+                      </table>
+                    </div>
+                  ) : null}
+                  {productionCosting?.weeklyUnallocatedSharedCosts > 0 ? <p className="production-costing-warning">Unallocated shared costs: {formatDalasi(productionCosting.weeklyUnallocatedSharedCosts)}</p> : null}
+                  <p className="production-costing-explainer">Costs are recalculated from source records when loaded, so late corrections are reflected without creating duplicate weekly summaries.</p>
+                </Panel>
+              </section>
+            ) : null}
+          </>
         ) : null}
 
         {activeNav === 'legacy-reports' ? (
@@ -4587,9 +4501,12 @@ function App() {
                 >
                   Close pond details
                 </button>
+                {canViewFinance && productionCostingError ? <p className="settings-error" role="alert">{productionCostingError}</p> : null}
                 <PondSummaryPanel
                   pond={selectedPond}
                   summary={selectedPondSummary}
+                  productionCosting={canViewFinance ? productionCosting?.ponds?.find((entry: any) => entry.pondId === selectedPond.id) || null : null}
+                  canViewFinance={canViewFinance}
                   isOwner={isOwner}
                   form={pondLogForm}
                   availablePonds={visiblePonds}
@@ -4638,7 +4555,7 @@ function App() {
 
         {activeNav === 'tasks' ? (
           <section className="dashboard-grid wide-left">
-            {isOwner ? (
+            {canViewFinance ? (
               <Panel eyebrow="Admin task dispatch" title="Create and send worker task">
                 <form className="owner-form" onSubmit={handleCreateTask}>
                   <input placeholder="Task title" value={taskForm.title} onChange={(event) => setTaskForm({ ...taskForm, title: event.target.value })} required />
@@ -5046,8 +4963,19 @@ function App() {
                       <option value="">All ponds</option>
                       {data.ponds.map((pond) => <option key={pond.id} value={pond.id}>Pond {pond.number}</option>)}
                     </select>
+                    <label className="finance-period-field">
+                      <span>Coverage start</span>
+                      <input type="date" value={financeForm.coverageStart} onChange={(event) => setFinanceForm({ ...financeForm, coverageStart: event.target.value })} />
+                    </label>
+                    <label className="finance-period-field">
+                      <span>Coverage end</span>
+                      <input type="date" value={financeForm.coverageEnd} onChange={(event) => setFinanceForm({ ...financeForm, coverageEnd: event.target.value })} />
+                    </label>
+                    <small className="finance-allocation-note">
+                      Shared costs are allocated by active pond-days; selecting a pond assigns the cost directly. Coverage dates spread the entered expense across covered days. Assign sales to a pond for pond-level profit/loss. Record stock purchases in Inventory only—inventory cost is charged when stock is used, not when purchased.
+                    </small>
                     <button className="primary-btn" type="submit"><Plus size={16} />Save</button>
-                    <button type="button" className="secondary-btn" onClick={() => { setShowFinanceForm(false); setFinanceForm({ type: 'RUNNING_COST', category: '', quantity: '', unit: 'kg', unitPrice: '', amount: '', pondId: '' }); }}>Cancel</button>
+                    <button type="button" className="secondary-btn" onClick={() => { setShowFinanceForm(false); setFinanceForm({ type: 'RUNNING_COST', category: '', quantity: '', unit: 'kg', unitPrice: '', amount: '', pondId: '', coverageStart: '', coverageEnd: '' }); }}>Cancel</button>
                   </form>
                 ) : null}
 
@@ -5059,6 +4987,64 @@ function App() {
                   onRevealMove={(id, event) => moveSwipeReveal('finance', id, event)}
                   onRevealEnd={endSwipeReveal}
                 />
+              </Panel>
+            </section>
+
+            <section className="production-costing-section">
+              <Panel eyebrow="Live pond costing" title="Weekly and production-cycle costs">
+                <div className="production-costing-toolbar">
+                  <label>Week starting (Monday)
+                    <input type="date" value={costingWeekStart} onChange={(event) => setCostingWeekStart(event.target.value)} />
+                  </label>
+                  {productionCosting?.weekStart ? <span>{new Date(productionCosting.weekStart).toLocaleDateString()} – {new Date(productionCosting.weekEnd).toLocaleDateString()}</span> : null}
+                </div>
+                {productionCostingError ? <p className="settings-error" role="alert">{productionCostingError}</p> : null}
+                {productionCosting ? (
+                  <>
+                    <p className="production-costing-explainer">Costs recalculate from current feed issues, expense dates, pond activity, and harvest records. Late changes update prior weeks automatically; weekly totals are derived and never duplicated.</p>
+                    <div className="finance-table-wrap">
+                      <table className="finance-table production-costing-table">
+                        <thead><tr><th>Pond</th><th>Feed</th><th>Running</th><th>Fixed</th><th>Other inventory</th><th>Week total</th><th>Week sales</th><th>Week net</th><th>Cycle total</th><th>Cycle net</th><th>Cycle break-even / kg</th><th>Cost / fish</th><th>Cost warnings and sources</th></tr></thead>
+                        <tbody>
+                          {productionCosting.ponds.map((pondCost: any) => (
+                            <tr key={pondCost.pondId}>
+                              <td>Pond {pondCost.number} · {pondCost.species}</td>
+                              <td>{formatDalasi(pondCost.weekly.feedCost)}</td>
+                              <td>{formatDalasi(pondCost.weekly.runningCosts)}</td>
+                              <td>{formatDalasi(pondCost.weekly.fixedCosts)}</td>
+                              <td>{formatDalasi(pondCost.weekly.otherDirectCosts)}</td>
+                              <td><strong>{formatDalasi(pondCost.weekly.totalCost)}</strong></td>
+                              <td>{formatDalasi(pondCost.weekly.sales)}</td>
+                              <td>{formatDalasi(pondCost.weekly.profitLoss)}</td>
+                              <td><strong>{formatDalasi(pondCost.cycle.totalCost)}</strong></td>
+                              <td>{formatDalasi(pondCost.cycle.profitLoss)}</td>
+                              <td>{pondCost.cycle.breakEvenPerKg == null ? 'Awaiting harvest weight' : formatDalasi(pondCost.cycle.breakEvenPerKg)}</td>
+                              <td>{pondCost.cycle.breakEvenPerFish == null ? 'Provisional' : formatDalasi(pondCost.cycle.breakEvenPerFish)}</td>
+                              <td>
+                                {pondCost.cycle.uncostedFeedKg > 0 || pondCost.cycle.uncostedInventoryUnits > 0
+                                  ? <span className="production-costing-warning">Uncosted: {pondCost.cycle.uncostedFeedKg} kg feed; {pondCost.cycle.uncostedInventoryUnits} other units. </span>
+                                  : null}
+                                {pondCost.weekly.expenseAllocations.length ? (
+                                  <details>
+                                    <summary>{pondCost.weekly.expenseAllocations.length} weekly expense source(s)</summary>
+                                    {pondCost.weekly.expenseAllocations.map((allocation: any) => (
+                                      <div key={allocation.expenseId} className="cost-allocation-row">
+                                        <span>{allocation.category}{allocation.description ? ` · ${allocation.description}` : ''} ({allocation.method === 'active-pond-days' ? 'active pond-days' : 'direct'})</span>
+                                        <strong>{formatDalasi(allocation.amount)}</strong>
+                                      </div>
+                                    ))}
+                                  </details>
+                                ) : null}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    {!productionCosting.ponds.length ? <p className="empty-copy">Ponds will appear here once registered.</p> : null}
+                    {productionCosting.weeklyUnallocatedSharedCosts > 0 ? <p className="production-costing-warning">Unallocated shared cost (no pond active during part of the period): {formatDalasi(productionCosting.weeklyUnallocatedSharedCosts)}</p> : null}
+                  </>
+                ) : null}
               </Panel>
             </section>
 
@@ -5105,7 +5091,9 @@ function App() {
                       ) : null}
                       <input placeholder="Unit" value={inventoryForm.unit} readOnly />
                       <input placeholder="Current stock" type="number" value={inventoryForm.currentStock} onChange={(event) => setInventoryForm({ ...inventoryForm, currentStock: event.target.value })} />
+                      <input placeholder="Purchase cost per unit" type="number" min="0" step="0.01" value={inventoryForm.unitCost} onChange={(event) => setInventoryForm({ ...inventoryForm, unitCost: event.target.value })} required={Number(inventoryForm.currentStock) > 0} />
                       <input placeholder="Min stock" type="number" value={inventoryForm.minStock} onChange={(event) => setInventoryForm({ ...inventoryForm, minStock: event.target.value })} />
+                      <small className="inventory-cost-hint">Cost is recorded per {inventoryForm.unit}. Historical stock without a known price stays uncosted until it is depleted.</small>
                       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                         <button type="button" className="secondary-btn" onClick={() => setShowInventoryForm(false)}>Cancel</button>
                         <button className="primary-btn" type="submit">Save item</button>
@@ -5121,6 +5109,9 @@ function App() {
                     <h3>Restock item</h3>
                     <div style={{ display: 'grid', gap: 12 }}>
                       <input type="number" min="1" step="0.1" placeholder="Quantity" value={restockQuantity} onChange={(event) => setRestockQuantity(event.target.value)} />
+                      <label>Purchase cost per {data.inventoryItems.find((item) => item.id === restockItemId)?.unit || 'unit'}
+                        <input type="number" min="0" step="0.01" value={restockUnitCost} onChange={(event) => setRestockUnitCost(event.target.value)} required />
+                      </label>
                       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                         <button type="button" className="secondary-btn" onClick={() => setRestockItemId(null)}>Cancel</button>
                         <button type="button" className="primary-btn" onClick={() => {
@@ -5133,84 +5124,72 @@ function App() {
                 </div>
               ) : null}
 
-              <div className="inventory-grid">
-                {data.inventoryItems.length === 0 ? (
-                  <p className="empty-copy">No inventory items yet.</p>
-                ) : (
-                  data.inventoryItems.map((item) => {
-                    const low = Number(item.currentStock || 0) <= Number(item.minStock || 0);
-                    const status = low ? 'Low stock' : Number(item.currentStock || 0) > Number(item.minStock || 0) * 2 ? 'Healthy' : 'Watching';
-                    const latestTransaction = item.transactions?.[0];
-                    return (
-                      <div
-                        key={item.id}
-                        className={low ? `inventory-card danger ${inventoryContextId === item.id ? 'context-menu-open' : ''}` : `inventory-card ${inventoryContextId === item.id ? 'context-menu-open' : ''}`}
-                        onContextMenu={(event) => {
-                          if (!isOwner) return;
-                          event.preventDefault();
-                          setInventoryContextId(item.id);
-                        }}
-                        onPointerDown={() => {
-                          if (!isOwner) return;
-                          clearInventoryLongPress();
-                          inventoryLongPressTimerRef.current = window.setTimeout(() => {
-                            setInventoryContextId(item.id);
-                          }, 500);
-                        }}
-                        onPointerUp={clearInventoryLongPress}
-                        onPointerLeave={clearInventoryLongPress}
-                      >
-                        {isOwner && inventoryContextId === item.id ? (
-                          <div className="inventory-context-action">
-                            <button
-                              type="button"
-                              className="danger-btn"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                showDeleteConfirmation('inventory', item.id, item.name || 'inventory item');
-                              }}
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        ) : null}
-                        <div className="inventory-card-header">
-                          <div>
-                            <strong>{item.name}</strong>
-                            <span>{item.category} · {item.unit}</span>
-                          </div>
-                          {isOwner ? (
-                            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                              <button type="button" className="primary-btn compact-btn" onClick={(event) => { event.stopPropagation(); setRestockItemId(item.id); setRestockQuantity(''); }} aria-label="Restock item">+</button>
-                            </div>
+              <div className="inventory-stock-table-wrap">
+                <table className="inventory-stock-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Stock item</th>
+                      <th scope="col">Status</th>
+                      <th scope="col">On hand</th>
+                      <th scope="col">Minimum</th>
+                      {canViewInventoryCost ? <th scope="col">Avg. unit cost</th> : null}
+                      <th scope="col">Last movement</th>
+                      <th scope="col">Added</th>
+                      {isOwner ? <th scope="col">Actions</th> : null}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.inventoryItems.length === 0 ? (
+                      <tr><td className="inventory-stock-empty" colSpan={isOwner ? (canViewInventoryCost ? 8 : 7) : (canViewInventoryCost ? 6 : 5)}>No inventory items yet.</td></tr>
+                    ) : data.inventoryItems.map((item) => {
+                      const currentStock = Number(item.currentStock || 0);
+                      const minimumStock = Number(item.minStock || 0);
+                      const low = currentStock <= minimumStock;
+                      const status = low ? 'Low stock' : currentStock > minimumStock * 2 ? 'Healthy' : 'Watching';
+                      const latestTransaction = item.transactions?.[0];
+                      const costHistory = item.transactions?.filter((transaction: any) => transaction.change > 0 || transaction.unitCost != null) || [];
+                      return (
+                        <tr key={item.id} className={low ? 'inventory-stock-row low-stock' : 'inventory-stock-row'}>
+                          <td>
+                            <strong className="inventory-stock-name">{item.name}</strong>
+                            <span className="inventory-stock-category">{item.category} · {item.unit}</span>
+                          </td>
+                          <td><span className={`inventory-stock-status ${low ? 'low' : status === 'Healthy' ? 'healthy' : 'watching'}`}>{status}</span></td>
+                          <td className="inventory-stock-number">{formatTwoDecimalPlaces(currentStock)} {item.unit}</td>
+                          <td className="inventory-stock-number">{formatTwoDecimalPlaces(minimumStock)} {item.unit}</td>
+                          {canViewInventoryCost ? (
+                            <td>
+                              {item.weightedAverageUnitCost == null ? 'Unknown' : `${formatDalasi(item.weightedAverageUnitCost)} / ${item.unit}`}
+                              {costHistory.length ? (
+                                <details className="inventory-cost-history">
+                                  <summary>Cost history</summary>
+                                  {costHistory.map((transaction: any) => (
+                                    <div key={transaction.id} className="inventory-cost-history-row">
+                                      <span>{new Date(transaction.createdAt).toLocaleDateString()} · {transaction.change > 0 ? `Purchase +${transaction.change}` : `Used ${Math.abs(transaction.change)}`}</span>
+                                      <strong>{transaction.unitCost == null ? 'Unknown unit cost' : `${formatDalasi(transaction.unitCost)} / ${item.unit}`}</strong>
+                                    </div>
+                                  ))}
+                                </details>
+                              ) : null}
+                            </td>
                           ) : null}
-                        </div>
-                        <div className="inventory-metrics">
-                          <div>
-                            <span>On hand</span>
-                            <strong>{formatTwoDecimalPlaces(Number(item.currentStock ?? 0))}</strong>
-                          </div>
-                          <div>
-                            <span>Minimum</span>
-                            <strong>{item.minStock ?? 0}</strong>
-                          </div>
-                          <div>
-                            <span>Unit</span>
-                            <strong>{item.unit || '—'}</strong>
-                          </div>
-                        </div>
-                        <div className="inventory-transaction">
-                          <small>Created</small>
-                          <span>{item.createdAt ? new Date(item.createdAt).toLocaleString() : 'Not recorded'}</span>
-                        </div>
-                        <div className="inventory-transaction">
-                          <small>Last movement</small>
-                          <span>{latestTransaction ? `${latestTransaction.change > 0 ? '+' : ''}${latestTransaction.change} · ${latestTransaction.pond ? `Feed used at Pond ${latestTransaction.pond.number}` : (latestTransaction.reason || 'Adjustment')} · ${new Date(latestTransaction.createdAt).toLocaleDateString()}` : 'No transactions yet'}</span>
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
+                          <td>{latestTransaction
+                            ? <>{latestTransaction.change > 0 ? '+' : ''}{formatTwoDecimalPlaces(Number(latestTransaction.change))} {item.unit} · {latestTransaction.pond ? `Pond ${latestTransaction.pond.number}` : (latestTransaction.reason || 'Adjustment')} · {new Date(latestTransaction.createdAt).toLocaleDateString()}</>
+                            : 'No transactions yet'}</td>
+                          <td>{item.createdAt ? new Date(item.createdAt).toLocaleDateString() : '—'}</td>
+                          {isOwner ? (
+                            <td>
+                              <div className="inventory-stock-actions">
+                                <button type="button" className="primary-btn compact-btn" onClick={() => { setRestockItemId(item.id); setRestockQuantity(''); setRestockUnitCost(''); }}>Restock</button>
+                                <button type="button" className="danger-btn compact-btn" onClick={() => showDeleteConfirmation('inventory', item.id, item.name || 'inventory item')}>Delete</button>
+                              </div>
+                            </td>
+                          ) : null}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             </Panel>
             <Panel eyebrow="Alerting" title="Low stock monitor">
@@ -5223,6 +5202,24 @@ function App() {
           <section className="dashboard-grid wide-left">
             <HarvestCalendar />
           </section>
+        ) : null}
+
+        {activeNav === 'settings' && currentUser ? (
+          <SettingsPage
+            apiBaseUrl={apiBaseUrl}
+            token={token}
+            user={currentUser}
+            theme={theme}
+            onThemeChange={handleThemeChange}
+            onUserChange={(profile) => {
+              setCurrentUser((current) => {
+                if (!current) return current;
+                const updated = { ...current, ...profile };
+                localStorage.setItem('aquaculture-user', JSON.stringify(updated));
+                return updated;
+              });
+            }}
+          />
         ) : null}
 
       </main>
@@ -5401,6 +5398,8 @@ function App() {
 function PondSummaryPanel({
   pond,
   summary,
+  productionCosting,
+  canViewFinance,
   isOwner,
   form,
   inventoryItems,
@@ -5420,6 +5419,8 @@ function PondSummaryPanel({
 }: {
   pond: any | null;
   summary: any | null;
+  productionCosting: any | null;
+  canViewFinance: boolean;
   isOwner: boolean;
   form: {
     feedKg: string;
@@ -5459,6 +5460,7 @@ function PondSummaryPanel({
   refreshDashboard: () => Promise<void>;
   setToastMessage: React.Dispatch<React.SetStateAction<string | null>>;
 }) {
+  const [breakEvenWeightGrams, setBreakEvenWeightGrams] = useState('');
   if (!pond || !summary) {
     return (
       <Panel eyebrow="Pond inspection" title="Select a pond">
@@ -5472,6 +5474,12 @@ function PondSummaryPanel({
   const targetAvg = pond.targetHarvestKg ? (pond.targetHarvestKg * 1000).toFixed(0) + ' g' : 'Not planned';
   const daysRemaining = summary.harvest ? summary.harvest.daysRemaining : null;
   const growthProgress = summary.harvest ? summary.harvest.progressPercent : null;
+  const estimatedFishWeight = Number(breakEvenWeightGrams);
+  const estimatedFishBreakEven = productionCosting?.cycle?.breakEvenPerKg != null
+    && Number.isFinite(estimatedFishWeight)
+    && estimatedFishWeight > 0
+    ? productionCosting.cycle.breakEvenPerKg * estimatedFishWeight / 1000
+    : null;
   const availableFeedSizes = [...new Set(
     inventoryItems
       .filter((item) => {
@@ -5597,6 +5605,55 @@ function PondSummaryPanel({
   return (
     <Panel eyebrow={`Pond ${pond.number}`} title={isOwner ? 'Admin inspection view' : 'Worker pond update'}>
       <div className="pond-detail-stack">
+        {canViewFinance && productionCosting ? (
+          <div className="pond-detail-card pond-costing-card">
+            <div className="detail-card-header">
+              <div>
+                <span className="eyebrow">Production costing · {new Date(productionCosting.cycleStart).toLocaleDateString()}</span>
+                <h3>Weekly and cycle costs</h3>
+              </div>
+              <Fish size={26} />
+            </div>
+            <div className="pond-costing-grid">
+              <div><span>Week feed</span><strong>{formatDalasi(productionCosting.weekly.feedCost)}</strong></div>
+              <div><span>Week running costs</span><strong>{formatDalasi(productionCosting.weekly.runningCosts)}</strong></div>
+              <div><span>Week fixed costs</span><strong>{formatDalasi(productionCosting.weekly.fixedCosts)}</strong></div>
+              <div><span>Week other inventory</span><strong>{formatDalasi(productionCosting.weekly.otherDirectCosts)}</strong></div>
+              <div><span>Week total</span><strong>{formatDalasi(productionCosting.weekly.totalCost)}</strong></div>
+              <div><span>Week sales / net</span><strong>{formatDalasi(productionCosting.weekly.sales)} / {formatDalasi(productionCosting.weekly.profitLoss)}</strong></div>
+              <div><span>Cycle total</span><strong>{formatDalasi(productionCosting.cycle.totalCost)}</strong></div>
+              <div><span>Cycle sales / net</span><strong>{formatDalasi(productionCosting.cycle.sales)} / {formatDalasi(productionCosting.cycle.profitLoss)}</strong></div>
+              <div><span>Harvested</span><strong>{productionCosting.cycle.harvestFish} fish · {Number(productionCosting.cycle.harvestKg).toFixed(2)} kg</strong></div>
+              <div><span>Average break-even</span><strong>{productionCosting.cycle.breakEvenPerKg == null ? 'Provisional — cost or harvest data incomplete' : `${formatDalasi(productionCosting.cycle.breakEvenPerKg)}/kg · ${formatDalasi(productionCosting.cycle.breakEvenPerFish)}/fish`}</strong></div>
+            </div>
+            {(productionCosting.cycle.uncostedFeedKg > 0 || productionCosting.cycle.uncostedInventoryUnits > 0) ? (
+              <p className="production-costing-warning">
+                Some consumed stock has no recorded purchase price: {productionCosting.cycle.uncostedFeedKg} kg feed and {productionCosting.cycle.uncostedInventoryUnits} other units. Break-even is withheld until this cost gap is resolved.
+              </p>
+            ) : null}
+            <label className="fish-break-even-field">
+              Fish weight (grams)
+              <input type="number" min="1" step="1" value={breakEvenWeightGrams} onChange={(event) => setBreakEvenWeightGrams(event.target.value)} placeholder={typeof currentAvg === 'number' ? String(currentAvg) : 'Enter weight'} />
+            </label>
+            <p className="fish-break-even-result">
+              {estimatedFishBreakEven == null
+                ? 'Enter a weight after a reliable cycle break-even/kg is available.'
+                : `Estimated break-even for a ${estimatedFishWeight} g fish: ${formatDalasi(estimatedFishBreakEven)}. Pond-level average only, not an individual fish cost.`}
+            </p>
+            {productionCosting.weekly.expenseAllocations.length ? (
+              <details className="cost-allocation-details">
+                <summary>Weekly shared and direct expense allocations</summary>
+                {productionCosting.weekly.expenseAllocations.map((allocation: any) => (
+                  <div key={allocation.expenseId} className="cost-allocation-row">
+                    <span>{allocation.category}{allocation.description ? ` · ${allocation.description}` : ''}</span>
+                    <span>{allocation.method === 'active-pond-days' ? 'Active pond-days' : 'Direct to pond'}</span>
+                    <strong>{formatDalasi(allocation.amount)}</strong>
+                  </div>
+                ))}
+              </details>
+            ) : null}
+          </div>
+        ) : null}
         <div className="pond-detail-card">
           <div className="detail-card-header">
             <div>

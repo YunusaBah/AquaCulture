@@ -29,6 +29,8 @@ AquaCulture is a mobile-first aquaculture management platform for fish farms, fi
 5. Start the app:
   `npm run dev`
 
+If you forget an account password while running locally, reset it securely from a local terminal with `npm run auth:reset-local-password -w @aquaculture/api`. The tool asks for the account email and prompts for the new password without displaying it; it refuses to run against production or remote databases. Each account must use a unique email address.
+
 ## Useful scripts
 
 - `npm run dev` — run API and web app together
@@ -38,21 +40,31 @@ AquaCulture is a mobile-first aquaculture management platform for fish farms, fi
 - `npm run db:push` — sync schema to the database
 - `npm run db:seed` — seed demo data
 
-## Free-tier deployment
+## Vercel deployment
 
-The repository includes a Render Blueprint for the API (`render.yaml`) and Vercel settings for the Vite frontend (`vercel.json`).
+The Vercel project configuration deploys the Vite frontend and Express API together. The frontend is served from `apps/web/dist`; API requests under `/api/*` are handled by the serverless Express function in `api/[...path].ts`. The frontend's default API URL is the same deployment's `/api`, so no separate API host is needed.
 
-1. Create a PostgreSQL project on Neon and copy its connection string. Use the direct connection URL for reliable Prisma migrations.
-2. In Render, create a Blueprint from this repository and provide `DATABASE_URL` when prompted. The Blueprint generates `JWT_SECRET`, builds the API, runs pending Prisma migrations on startup, and exposes `/api/health`.
-3. In Vercel, import the repository with the project root as the Root Directory. Set `VITE_API_URL` to the deployed Render URL with `/api` appended, for example `https://aquaculture-api.onrender.com/api`.
-4. Redeploy the Vercel project after setting `VITE_API_URL`.
+1. Create a PostgreSQL database with a provider such as Neon. Copy its connection string; use the provider's recommended runtime connection string and keep it private.
+2. Import this repository into Vercel with the repository root as the project root. Keep the checked-in `vercel.json` build and output settings.
+3. In **Project Settings → Environment Variables**, add `DATABASE_URL` (the PostgreSQL connection string) and `JWT_SECRET` (a long, random secret). Add them for Production and any Preview/Development environments you intend to use. Do not use the example/local credentials in production.
+4. Keep `VITE_API_URL` unset for the same-domain deployment; the app defaults to `/api`. If you intentionally use another API origin, set `VITE_API_URL` to that origin including its `/api` suffix.
+5. Before serving a new deployment with schema changes, run pending migrations once from a trusted local checkout configured for the production database: `npm run db:migrate:deploy -w @aquaculture/api`. Vercel builds generate the Prisma client and build both workspaces; database migrations are deliberately run separately rather than during each concurrent deployment build.
+6. Deploy from Vercel and verify `https://<your-project>.vercel.app/api/health` returns `{"status":"ok",...}`. Then test registration/login and the main data workflows.
 
-Free plans have usage limits and can change; they are not guaranteed to remain free forever. Render's free service may sleep when idle, and files uploaded to its temporary filesystem (including pond photos) are not durable across restarts or deploys. Use persistent object storage before relying on uploaded files in production.
+Vercel Functions use ephemeral filesystems. Pond-photo uploads are written under `/tmp` and are not durable or reliably shared between function invocations. Profile photos selected in Settings are stored as image data in the database, while any profile-photo URL you provide must point to durable storage. Configure persistent object storage before relying on pond-photo uploads in production. Set any required database network access/allowlisting at the database provider for Vercel deployments. Free plans and quotas can change and are not guaranteed to remain free.
 
 ## Access roles
 
 - Owner role for financial and operational oversight
 - Worker role for field operations and pond management
+
+## Production costing
+
+Pond costing is available to users whose workspace permissions include finance viewing (owners have it by default) and is calculated from source records when Finance, Reports, or pond details load. Weekly summaries are not stored, so corrections to older source records automatically recalculate without duplicate weekly entries. Inventory purchases are entered once in Inventory with quantity, unit, and purchase cost per unit. Feed is valued using a moving weighted-average cost from the item's purchase and issue history, then charged to the pond when consumed; other inventory is charged when a stock issue is linked to a pond. Inventory purchase cost details are gated by the `INVENTORY_COST_VIEW` permission. Inventory purchases are not also treated as finance expenses. Existing stock transactions without a recorded purchase cost remain uncosted and are flagged rather than assigned an invented price.
+
+Shared running and fixed costs are spread across active ponds for each covered day, with each day's shared amount divided equally among ponds active that day. Pond-specific expenses are charged to that pond only. A fixed expense with a coverage period is spread evenly across its inclusive calendar days, so a weekly report includes only the days in that week; expenses without coverage dates apply to their recorded day. The costing breakdown retains expense categories, descriptions, and allocation method for review.
+
+Cycle break-even estimates use accumulated cycle costs and actual harvest count and weight. A missing harvest weight, zero harvest, or any consumed stock with unknown cost makes the relevant estimate provisional or unavailable. The fish-weight calculator scales the pond-level cost-per-kg average; it does not claim to know an individual fish's exact cost. Pond cycle history currently starts at its `stockedAt` date (or creation date when absent); farms should record a new pond/cycle after harvest because the current pond schema does not retain a separate history of repeated cycles.
 
 ## Notes
 

@@ -3,6 +3,8 @@ import { prisma } from '../lib/prisma';
 import { AuthRequest } from '../middleware/auth';
 import { createNotificationForUser } from './notifications';
 import { nextReportReference } from '../lib/financeTransactionId';
+import { pondTenantWhere } from '../lib/tenant';
+import { hasPermissionForRole } from '../config/permissions';
 
 function asNumber(value: unknown) {
   const parsed = Number(value);
@@ -11,12 +13,15 @@ function asNumber(value: unknown) {
 
 async function applyQueuedSyncItem(
   userId: string,
+  tenantId: string,
+  userRole: 'OWNER' | 'WORKER',
   item: { action?: string; tableName?: string; recordId?: string; payload?: Record<string, any> },
 ) {
   const payload = item.payload || {};
 
   switch (item.action) {
     case 'pond_create': {
+      if (userRole !== 'OWNER') throw new Error('Only admins can create ponds.');
       const siteName = String(payload.siteName || 'Primary Farm Site').trim();
       const species = String(payload.species || 'CATFISH');
       const requestedNumber = asNumber(payload.number);
@@ -26,23 +31,29 @@ async function applyQueuedSyncItem(
         throw new Error('pond_create payload requires initialPopulation');
       }
 
-      let site = payload.siteId ? await prisma.farmSite.findUnique({ where: { id: String(payload.siteId) } }) : null;
+      let site = payload.siteId
+        ? await prisma.farmSite.findFirst({ where: { id: String(payload.siteId), farm: { ownerId: tenantId } } })
+        : null;
       if (!site) {
-        site = await prisma.farmSite.findFirst({ where: { name: { equals: siteName, mode: 'insensitive' } } });
+        site = await prisma.farmSite.findFirst({ where: { name: { equals: siteName, mode: 'insensitive' }, farm: { ownerId: tenantId } } });
       }
       if (!site) {
         const ownerFarm =
-          (await prisma.farm.findFirst({ where: { ownerId: userId }, orderBy: { createdAt: 'asc' } })) ||
-          (await prisma.farm.create({ data: { name: siteName, ownerId: userId } }));
+          (await prisma.farm.findFirst({ where: { ownerId: tenantId }, orderBy: { createdAt: 'asc' } })) ||
+          (await prisma.farm.create({ data: { name: siteName, ownerId: tenantId } }));
         site = await prisma.farmSite.create({
           data: { name: siteName, farmId: ownerFarm.id, location: 'Farm site', timezone: 'UTC' },
         });
       }
 
       const assignedUserId = typeof payload.assignedUserId === 'string' && payload.assignedUserId ? payload.assignedUserId : null;
+      if (assignedUserId && !(await prisma.user.findFirst({
+        where: { id: assignedUserId, adminId: tenantId, role: { name: 'WORKER' } },
+        select: { id: true },
+      }))) throw new Error('The selected worker does not belong to this workspace.');
       return prisma.$transaction(async (tx) => {
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(74152861)`;
-        const highestNumberedPond = await tx.pond.findFirst({ orderBy: { number: 'desc' }, select: { number: true } });
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(74152861)::text AS locked`;
+        const highestNumberedPond = await tx.pond.findFirst({ where: pondTenantWhere(tenantId), orderBy: { number: 'desc' }, select: { number: true } });
         const number = Math.max(requestedNumber || 0, (highestNumberedPond?.number ?? 0) + 1);
         return tx.pond.create({
           data: {
@@ -67,6 +78,7 @@ async function applyQueuedSyncItem(
     }
 
     case 'task_create': {
+      if (userRole !== 'OWNER') throw new Error('Only admins can create tasks.');
       const assigneeIds = (Array.isArray(payload.assigneeIds) ? payload.assigneeIds : payload.assigneeId ? [payload.assigneeId] : [])
         .filter((value): value is string => typeof value === 'string' && Boolean(value));
       const title = String(payload.title || '').trim();
@@ -74,10 +86,16 @@ async function applyQueuedSyncItem(
       if (!title) {
         throw new Error('task_create payload requires title');
       }
+      const workers = await prisma.user.findMany({
+        where: { id: { in: assigneeIds }, adminId: tenantId, role: { name: 'WORKER' } },
+        select: { id: true },
+      });
+      if (workers.length !== assigneeIds.length) throw new Error('Task assignees must belong to this workspace.');
 
       const task = await prisma.$transaction(async (tx) => tx.task.create({
         data: {
           reportId: await nextReportReference(tx),
+          tenantId,
           title,
           description,
           creatorId: userId,
@@ -105,6 +123,7 @@ async function applyQueuedSyncItem(
     }
 
     case 'finance_record_create': {
+      if (userRole !== 'OWNER') throw new Error('Only admins can create finance records.');
       const normalizedType = String(payload.type ?? 'RUNNING_COST').toUpperCase();
       const financeTypeMap: Record<string, string> = {
         INCOME: 'SALES',
@@ -112,6 +131,10 @@ async function applyQueuedSyncItem(
         BUDGET: 'FIXED_COST',
       };
       const type = financeTypeMap[normalizedType] || normalizedType;
+      if (payload.pondId && !(await prisma.pond.findFirst({
+        where: { id: String(payload.pondId), ...pondTenantWhere(tenantId) },
+        select: { id: true },
+      }))) throw new Error('Pond not found in this workspace.');
       return prisma.$transaction(async (tx) => tx.financeRecord.create({
         data: {
           transactionId: await nextReportReference(tx),
@@ -124,6 +147,7 @@ async function applyQueuedSyncItem(
           amount: asNumber(payload.amount) ?? 0,
           pondId: payload.pondId ? String(payload.pondId) : null,
           recordedById: userId,
+          tenantId,
         },
       }));
     }
@@ -133,6 +157,12 @@ async function applyQueuedSyncItem(
       if (!pondId) {
         throw new Error('pond_update payload requires pondId');
       }
+      const pond = await prisma.pond.findFirst({
+        where: { id: String(pondId), ...pondTenantWhere(tenantId) },
+        select: { id: true, assignedUserId: true },
+      });
+      if (!pond) throw new Error('Pond not found in this workspace.');
+      if (userRole === 'WORKER' && pond.assignedUserId !== userId) throw new Error('Workers can only update ponds assigned to them.');
 
       // perform all pond updates inside a transaction so denormalized population stays consistent
       const result = await prisma.$transaction(async (tx) => {
@@ -258,6 +288,7 @@ export async function listSyncQueue(req: AuthRequest, res: Response) {
 export async function queueSyncItems(req: AuthRequest, res: Response) {
   const { items } = req.body as {
     items?: Array<{
+      clientId?: string;
       action?: string;
       tableName?: string;
       recordId?: string;
@@ -269,12 +300,23 @@ export async function queueSyncItems(req: AuthRequest, res: Response) {
   if (!Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: 'items[] is required' });
   }
+  if (items.some((item) => typeof item.clientId !== 'string' || !item.clientId.trim())) {
+    return res.status(400).json({ error: 'Every sync item must include its clientId' });
+  }
 
   const queued = await Promise.all(
     items.map((item) =>
-      prisma.deviceSync.create({
-        data: {
+      prisma.deviceSync.upsert({
+        where: {
+          userId_clientId: {
+            userId: req.userId!,
+            clientId: item.clientId!.trim(),
+          },
+        },
+        update: {},
+        create: {
           userId: req.userId!,
+          clientId: item.clientId!.trim(),
           deviceId: item.deviceId || 'browser-web',
           action: item.action || 'UPDATE',
           tableName: item.tableName || 'unknown_table',
@@ -289,6 +331,7 @@ export async function queueSyncItems(req: AuthRequest, res: Response) {
 }
 
 export async function flushSyncQueue(req: AuthRequest, res: Response) {
+  const user = await prisma.user.findUnique({ where: { id: req.userId! }, select: { permissions: true } });
   const pending = await prisma.deviceSync.findMany({
     where: { userId: req.userId!, status: 'PENDING' },
     orderBy: { createdAt: 'asc' },
@@ -298,16 +341,43 @@ export async function flushSyncQueue(req: AuthRequest, res: Response) {
     return res.json({ flushed: 0, items: [] });
   }
 
-  const flushed: Array<{ id: string; action: string; status: string }> = [];
+  const flushed: Array<{ id: string; clientId: string | null; action: string; status: string; error?: string }> = [];
 
   for (const item of pending) {
     try {
-      await applyQueuedSyncItem(req.userId!, item as any);
+      const payload = item.payload && typeof item.payload === 'object' && !Array.isArray(item.payload)
+        ? item.payload as Record<string, unknown>
+        : {};
+      const requiredPermissions: string[] = item.action === 'pond_create'
+        ? ['POND_CREATE']
+        : item.action === 'task_create'
+          ? ['TASK_CREATE']
+          : item.action === 'finance_record_create'
+            ? ['FINANCE_MANAGE']
+            : item.action === 'pond_update'
+              ? [
+                ...(payload.feedKg || payload.feedGrams ? ['FEEDING_CREATE'] : []),
+                ...(payload.ph !== undefined || payload.dissolvedO2 !== undefined || payload.ammonia !== undefined || payload.waterAddedPercent !== undefined || payload.waterRemovedPercent !== undefined || payload.waterComment ? ['WATER_QUALITY_CREATE'] : []),
+                ...(payload.mortality ? ['MORTALITY_CREATE'] : []),
+                ...(payload.harvestQuantity ? ['HARVEST_CREATE'] : []),
+                ...(payload.avgWeightGrams ? ['OBSERVATION_CREATE'] : []),
+              ]
+              : [];
+      const overrides = user?.permissions && typeof user.permissions === 'object' && !Array.isArray(user.permissions)
+        ? user.permissions as Record<string, unknown>
+        : {};
+      if (requiredPermissions.some((permission) => {
+        const override = overrides[permission];
+        return typeof override === 'boolean'
+          ? !override
+          : !hasPermissionForRole(req.userRole, permission);
+      })) throw new Error('One or more permissions required for this offline change have been disabled.');
+      await applyQueuedSyncItem(req.userId!, req.tenantId!, req.userRole!, item as any);
       await prisma.deviceSync.update({
         where: { id: item.id },
         data: { status: 'SYNCHRONIZED', syncedAt: new Date() },
       });
-      flushed.push({ id: item.id, action: item.action, status: 'SYNCHRONIZED' });
+      flushed.push({ id: item.id, clientId: item.clientId, action: item.action, status: 'SYNCHRONIZED' });
       await prisma.auditLog.create({
         data: {
           userId: req.userId!,
@@ -322,6 +392,7 @@ export async function flushSyncQueue(req: AuthRequest, res: Response) {
         },
       });
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       await prisma.deviceSync.update({
         where: { id: item.id },
         data: { status: 'REJECTED', syncedAt: new Date() },
@@ -335,10 +406,11 @@ export async function flushSyncQueue(req: AuthRequest, res: Response) {
           meta: {
             deviceId: item.deviceId,
             payload: item.payload,
-            error: error instanceof Error ? error.message : String(error),
+            error: message,
           },
         },
       });
+      flushed.push({ id: item.id, clientId: item.clientId, action: item.action, status: 'REJECTED', error: message });
     }
   }
 

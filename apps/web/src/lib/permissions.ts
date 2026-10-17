@@ -16,7 +16,7 @@ export const ROLE_PERMISSIONS: Record<AppRole, string[]> = {
     'TASK_ASSIGN',
     'TASK_COMPLETE',
   ],
-  WORKER: ['POND_VIEW_ASSIGNED', 'POND_UPDATE', 'FEEDING_CREATE', 'MORTALITY_CREATE', 'INVENTORY_VIEW', 'TASK_COMPLETE'],
+  WORKER: ['POND_VIEW_ASSIGNED', 'POND_UPDATE', 'FEEDING_CREATE', 'MORTALITY_CREATE', 'INVENTORY_VIEW', 'TASK_COMPLETE', 'REPORT_VIEW'],
   VIEWER: [
     // Read-only access - can view all dashboards and data but cannot edit
     'FARM_VIEW',
@@ -28,9 +28,10 @@ export const ROLE_PERMISSIONS: Record<AppRole, string[]> = {
   ],
 };
 
-export function hasPermission(role: AppRole | undefined, permission: string): boolean {
+export function hasPermission(role: AppRole | undefined, permission: string, overrides?: Record<string, boolean> | null): boolean {
   if (!role) {
     return false;
   }
+  if (typeof overrides?.[permission] === 'boolean') return overrides[permission];
   return ROLE_PERMISSIONS[role].includes(permission);
 }

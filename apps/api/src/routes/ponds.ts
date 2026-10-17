@@ -3,13 +3,13 @@ import { getPonds, createPond, deletePond, getPond, updatePond, photoUploadMiddl
 import { requireAuth, requirePermission, requireRole } from '../middleware/auth';
 
 const router = Router();
-router.get('/', requireAuth, getPonds);
+router.get('/', requireAuth, requirePermission('POND_VIEW', 'POND_VIEW_ASSIGNED'), getPonds);
 router.post('/', requireAuth, requirePermission('POND_CREATE'), createPond);
-router.get('/:id', requireAuth, getPond);
+router.get('/:id', requireAuth, requirePermission('POND_VIEW', 'POND_VIEW_ASSIGNED'), getPond);
 router.put('/:id', requireAuth, requirePermission('POND_UPDATE'), updatePond);
 router.delete('/:id', requireAuth, requirePermission('POND_ARCHIVE'), requireRole('OWNER'), deletePond);
 // photo upload
-router.post('/:id/photos', requireAuth, photoUploadMiddleware(), uploadPondPhoto);
+router.post('/:id/photos', requireAuth, requirePermission('ATTACHMENT_CREATE'), photoUploadMiddleware(), uploadPondPhoto);
 // QR
 router.get('/:id/qr', requireAuth, getPondQr);
 
